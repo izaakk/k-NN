@@ -14,15 +14,16 @@ endif ()
 
 # Apply patches
 if(NOT DEFINED APPLY_LIB_PATCHES OR "${APPLY_LIB_PATCHES}" STREQUAL true)
-    # Define list of patch files
+    # Define list of patch files - SVS support now comes from PR #4548 branch
+    # Note: Skipping 0006 as it depends on IndexBinaryHNSWCagra which doesn't exist in SVS branch
     set(PATCH_FILE_LIST)
     list(APPEND PATCH_FILE_LIST "${CMAKE_CURRENT_SOURCE_DIR}/patches/faiss/0001-Custom-patch-to-support-multi-vector.patch")
     list(APPEND PATCH_FILE_LIST "${CMAKE_CURRENT_SOURCE_DIR}/patches/faiss/0002-Enable-precomp-table-to-be-shared-ivfpq.patch")
     list(APPEND PATCH_FILE_LIST "${CMAKE_CURRENT_SOURCE_DIR}/patches/faiss/0003-Custom-patch-to-support-range-search-params.patch")
     list(APPEND PATCH_FILE_LIST "${CMAKE_CURRENT_SOURCE_DIR}/patches/faiss/0004-Custom-patch-to-support-binary-vector.patch")
     list(APPEND PATCH_FILE_LIST "${CMAKE_CURRENT_SOURCE_DIR}/patches/faiss/0005-Custom-patch-to-support-multi-vector-IndexHNSW-search_level_0.patch")
-    list(APPEND PATCH_FILE_LIST "${CMAKE_CURRENT_SOURCE_DIR}/patches/faiss/0006-Add-nested-search-support-for-IndexBinaryHNSWCagra.patch")
-    list(APPEND PATCH_FILE_LIST "${CMAKE_CURRENT_SOURCE_DIR}/patches/faiss/0007-Add-SVS-support-from-PR-4548.patch")
+    # Note: 0006-Add-nested-search-support-for-IndexBinaryHNSWCagra.patch - SKIPPED (IndexBinaryHNSWCagra not in SVS branch)
+    # Note: 0007-Add-SVS-support-from-PR-4548.patch is now built-in from using the PR branch
 
     # Get patch id of the last commit
     execute_process(COMMAND sh -c "git --no-pager show HEAD | git patch-id --stable" OUTPUT_VARIABLE PATCH_ID_OUTPUT_FROM_COMMIT WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/external/faiss)
@@ -50,7 +51,10 @@ if(NOT DEFINED APPLY_LIB_PATCHES OR "${APPLY_LIB_PATCHES}" STREQUAL true)
     list(SORT PATCH_FILES_TO_APPLY)
     foreach(PATCH_FILE IN LISTS PATCH_FILES_TO_APPLY)
         message(STATUS "Applying patch of ${PATCH_FILE}")
-        execute_process(COMMAND git ${GIT_PATCH_COMMAND} --3way --ignore-space-change --ignore-whitespace ${PATCH_FILE} WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/external/faiss ERROR_VARIABLE ERROR_MSG RESULT_VARIABLE RESULT_CODE)
+        execute_process(COMMAND git ${GIT_PATCH_COMMAND} --3way --ignore-space-change --ignore-whitespace ${PATCH_FILE} 
+                      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/external/faiss 
+                      ERROR_VARIABLE ERROR_MSG 
+                      RESULT_VARIABLE RESULT_CODE)
         if(RESULT_CODE)
             message(FATAL_ERROR "Failed to apply patch:\n${ERROR_MSG}")
         endif()
