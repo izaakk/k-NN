@@ -24,6 +24,8 @@ import java.util.function.Function;
 
 import static org.opensearch.knn.common.KNNConstants.METHOD_HNSW;
 import static org.opensearch.knn.common.KNNConstants.METHOD_IVF;
+import static org.opensearch.knn.common.KNNConstants.METHOD_SVS_FLAT;
+import static org.opensearch.knn.common.KNNConstants.METHOD_SVS_VAMANA;
 import static org.opensearch.knn.common.KNNConstants.NAME;
 
 /**
@@ -62,7 +64,12 @@ public class Faiss extends NativeLibrary {
         Function<Float, Float>>builder().put(SpaceType.COSINESIMIL, distance -> 1 - distance).build();
 
     // Package private so that the method resolving logic can access the methods
-    final static Map<String, KNNMethod> METHODS = ImmutableMap.of(METHOD_HNSW, new FaissHNSWMethod(), METHOD_IVF, new FaissIVFMethod());
+    final static Map<String, KNNMethod> METHODS = ImmutableMap.of(
+        METHOD_HNSW, new FaissHNSWMethod(),
+        METHOD_IVF, new FaissIVFMethod(),
+        METHOD_SVS_FLAT, FaissSVSFlatMethod.getInstance(),
+        METHOD_SVS_VAMANA, FaissSVSVamanaMethod.getInstance()
+    );
 
     public final static Faiss INSTANCE = new Faiss(
         METHODS,
@@ -134,17 +141,25 @@ public class Faiss extends NativeLibrary {
             if (METHOD_HNSW.equals(parameters.get(NAME))) {
                 return FaissHNSWMethod.supportsRemoteIndexBuild(parameters);
             }
+            if (METHOD_SVS_FLAT.equals(parameters.get(NAME)) || METHOD_SVS_VAMANA.equals(parameters.get(NAME))) {
+                // SVS does not currently support remote index building
+                return false;
+            }
         }
         return false;
     }
 
-    @Override
+        @Override
     public RemoteIndexParameters createRemoteIndexingParameters(Map<String, Object> parameters) {
         if (METHOD_HNSW.equals(parameters.get(NAME))) {
             FaissHNSWMethod method = (FaissHNSWMethod) METHODS.get(METHOD_HNSW);
             return method.createRemoteIndexingParameters(parameters);
         }
-        throw new IllegalArgumentException("Unsupported method for remote indexing");
+        if (METHOD_SVS_FLAT.equals(parameters.get(NAME)) || METHOD_SVS_VAMANA.equals(parameters.get(NAME))) {
+            // SVS does not currently support remote index building
+            throw new UnsupportedOperationException("SVS method does not support remote index building");
+        }
+        return null;
     }
 
     @Override

@@ -171,6 +171,7 @@ if ("${WIN32}" STREQUAL "")
                 ${TARGET_LIB_NMSLIB}
                 ${TARGET_LIB_COMMON}
                 ${TARGET_LIB_UTIL}
+                gfortran
         )
 
         target_include_directories(jni_test PRIVATE

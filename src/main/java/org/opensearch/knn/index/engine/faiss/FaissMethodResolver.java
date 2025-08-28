@@ -31,8 +31,12 @@ import static org.opensearch.knn.common.KNNConstants.FAISS_SQ_TYPE;
 import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
 import static org.opensearch.knn.common.KNNConstants.METHOD_HNSW;
 import static org.opensearch.knn.common.KNNConstants.METHOD_IVF;
+import static org.opensearch.knn.common.KNNConstants.METHOD_SVS_FLAT;
+import static org.opensearch.knn.common.KNNConstants.METHOD_SVS_VAMANA;
 import static org.opensearch.knn.index.engine.faiss.FaissHNSWMethod.HNSW_COMPONENT;
 import static org.opensearch.knn.index.engine.faiss.FaissIVFMethod.IVF_COMPONENT;
+import static org.opensearch.knn.index.engine.faiss.FaissSVSFlatMethod.SVS_FLAT_COMPONENT;
+import static org.opensearch.knn.index.engine.faiss.FaissSVSVamanaMethod.SVS_VAMANA_COMPONENT;
 
 public class FaissMethodResolver extends AbstractMethodResolver {
 
@@ -60,6 +64,17 @@ public class FaissMethodResolver extends AbstractMethodResolver {
             spaceType,
             shouldRequireTraining ? METHOD_IVF : METHOD_HNSW
         );
+        
+        // Handle SVS methods specially since they don't follow the HNSW/IVF pattern
+        if (knnMethodContext != null) {
+            String methodName = knnMethodContext.getMethodComponentContext().getName();
+            if (METHOD_SVS_FLAT.equals(methodName)) {
+                return resolveSVSFlatMethod(knnMethodContext, knnMethodConfigContext, spaceType);
+            } else if (METHOD_SVS_VAMANA.equals(methodName)) {
+                return resolveSVSVamanaMethod(knnMethodContext, knnMethodConfigContext, spaceType);
+            }
+        }
+        
         MethodComponent method = METHOD_HNSW.equals(resolvedKNNMethodContext.getMethodComponentContext().getName()) == false
             ? IVF_COMPONENT
             : HNSW_COMPONENT;
@@ -186,5 +201,55 @@ public class FaissMethodResolver extends AbstractMethodResolver {
             return CompressionLevel.x32;
         }
         return CompressionLevel.x1;
+    }
+    
+    private ResolvedMethodContext resolveSVSFlatMethod(
+        KNNMethodContext knnMethodContext,
+        KNNMethodConfigContext knnMethodConfigContext,
+        SpaceType spaceType
+    ) {
+        // SVS Flat uses a simpler resolution strategy - no complex encoder logic like HNSW/IVF
+        KNNMethodContext resolvedKNNMethodContext = new KNNMethodContext(
+            KNNEngine.FAISS,
+            spaceType,
+            knnMethodContext.getMethodComponentContext()
+        );
+        
+        // Resolve method parameters using the SVS Flat component
+        resolveMethodParams(resolvedKNNMethodContext.getMethodComponentContext(), knnMethodConfigContext, SVS_FLAT_COMPONENT);
+        
+        // SVS doesn't use complex compression schemes like HNSW/IVF
+        CompressionLevel compressionLevel = getDefaultCompressionLevel(knnMethodConfigContext);
+        knnMethodConfigContext.setCompressionLevel(compressionLevel);
+        
+        return ResolvedMethodContext.builder()
+            .knnMethodContext(resolvedKNNMethodContext)
+            .compressionLevel(compressionLevel)
+            .build();
+    }
+
+    private ResolvedMethodContext resolveSVSVamanaMethod(
+        KNNMethodContext knnMethodContext,
+        KNNMethodConfigContext knnMethodConfigContext,
+        SpaceType spaceType
+    ) {
+        // SVS Vamana uses a simpler resolution strategy - no complex encoder logic like HNSW/IVF
+        KNNMethodContext resolvedKNNMethodContext = new KNNMethodContext(
+            KNNEngine.FAISS,
+            spaceType,
+            knnMethodContext.getMethodComponentContext()
+        );
+        
+        // Resolve method parameters using the SVS Vamana component
+        resolveMethodParams(resolvedKNNMethodContext.getMethodComponentContext(), knnMethodConfigContext, SVS_VAMANA_COMPONENT);
+        
+        // SVS doesn't use complex compression schemes like HNSW/IVF
+        CompressionLevel compressionLevel = getDefaultCompressionLevel(knnMethodConfigContext);
+        knnMethodConfigContext.setCompressionLevel(compressionLevel);
+        
+        return ResolvedMethodContext.builder()
+            .knnMethodContext(resolvedKNNMethodContext)
+            .compressionLevel(compressionLevel)
+            .build();
     }
 }

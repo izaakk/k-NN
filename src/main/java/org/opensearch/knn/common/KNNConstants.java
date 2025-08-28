@@ -35,7 +35,12 @@ public class KNNConstants {
     public static final String METHOD_PARAMETER_EF_CONSTRUCTION = "ef_construction";
     public static final String METHOD_PARAMETER_M = "m";
     public static final String METHOD_IVF = "ivf";
+    public static final String METHOD_SVS_FLAT = "svsflat";
+    public static final String METHOD_SVS_VAMANA = "svsvamana";
     public static final String METHOD_PARAMETER_NLIST = "nlist";
+    // SVS-specific parameters
+    public static final String SVS_PARAMETER_DEGREE = "degree";
+    public static final String SVS_PARAMETER_COMPRESSION = "compression";
     public static final String METHOD_PARAMETER_SPACE_TYPE = "space_type"; // used for mapping parameter
     // used for defining toplevel parameter
     public static final String TOP_LEVEL_PARAMETER_SPACE_TYPE = METHOD_PARAMETER_SPACE_TYPE;
