@@ -101,6 +101,7 @@ find_package(LAPACK REQUIRED)
 set(BUILD_TESTING OFF)          # Avoid building faiss tests
 set(FAISS_ENABLE_GPU OFF)
 set(FAISS_ENABLE_PYTHON OFF)
+set(FAISS_ENABLE_SVS ON)        # Enable SVS (Intel Scalable Vector Search) integration
 
 if(NOT DEFINED AVX2_ENABLED)
     set(AVX2_ENABLED true)   # set default value as true if the argument is not set
