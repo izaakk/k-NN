@@ -31,6 +31,7 @@ import static org.opensearch.knn.common.KNNConstants.FAISS_SQ_TYPE;
 import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
 import static org.opensearch.knn.common.KNNConstants.METHOD_HNSW;
 import static org.opensearch.knn.common.KNNConstants.METHOD_IVF;
+import static org.opensearch.knn.common.KNNConstants.METHOD_SVS_FLAT;
 import static org.opensearch.knn.index.engine.faiss.FaissHNSWMethod.HNSW_COMPONENT;
 import static org.opensearch.knn.index.engine.faiss.FaissIVFMethod.IVF_COMPONENT;
 
@@ -60,10 +61,26 @@ public class FaissMethodResolver extends AbstractMethodResolver {
             spaceType,
             shouldRequireTraining ? METHOD_IVF : METHOD_HNSW
         );
-        MethodComponent method = METHOD_HNSW.equals(resolvedKNNMethodContext.getMethodComponentContext().getName()) == false
-            ? IVF_COMPONENT
-            : HNSW_COMPONENT;
-        Map<String, Encoder> encoderMap = method == HNSW_COMPONENT ? FaissHNSWMethod.SUPPORTED_ENCODERS : FaissIVFMethod.SUPPORTED_ENCODERS;
+        
+        // Determine which method component to use based on the resolved method name
+        String methodName = resolvedKNNMethodContext.getMethodComponentContext().getName();
+        MethodComponent method;
+        Map<String, Encoder> encoderMap;
+        
+        if (METHOD_HNSW.equals(methodName)) {
+            method = HNSW_COMPONENT;
+            encoderMap = FaissHNSWMethod.SUPPORTED_ENCODERS;
+        } else if (METHOD_SVS_FLAT.equals(methodName)) {
+            method = FaissSVSFlatMethod.METHOD_COMPONENT;
+            encoderMap = FaissSVSFlatMethod.METHOD_COMPONENT.getParameters().containsKey(METHOD_ENCODER_PARAMETER)
+                ? ((Parameter.MethodComponentContextParameter) FaissSVSFlatMethod.METHOD_COMPONENT.getParameters()
+                    .get(METHOD_ENCODER_PARAMETER)).getMethodComponentMap()
+                : new HashMap<>();
+        } else {
+            // Default to IVF for backward compatibility
+            method = IVF_COMPONENT;
+            encoderMap = FaissIVFMethod.SUPPORTED_ENCODERS;
+        }
 
         // Fill in parameters for the encoder and then the method.
         resolveEncoder(resolvedKNNMethodContext, knnMethodConfigContext, encoderMap);
