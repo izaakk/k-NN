@@ -8,7 +8,9 @@ package org.opensearch.knn.index.engine.faiss;
 import com.google.common.collect.ImmutableSet;
 import org.opensearch.knn.index.SpaceType;
 import org.opensearch.knn.index.VectorDataType;
+import org.opensearch.knn.index.engine.AbstractFaissMethod;
 import org.opensearch.knn.index.engine.MethodComponent;
+import org.opensearch.knn.index.engine.MethodComponentContext;
 import org.opensearch.knn.index.engine.Parameter;
 
 import java.util.Arrays;
@@ -36,7 +38,7 @@ public class FaissSVSFlatMethod extends AbstractFaissMethod {
 
     public final static List<SpaceType> SUPPORTED_SPACES = Arrays.asList(SpaceType.L2, SpaceType.INNER_PRODUCT);
 
-    private final static MethodComponent.MethodComponentContext DEFAULT_ENCODER_CONTEXT = new MethodComponent.MethodComponentContext(
+    private final static MethodComponentContext DEFAULT_ENCODER_CONTEXT = new MethodComponentContext(
         ENCODER_FLAT,
         Collections.emptyMap()
     );
