@@ -8,7 +8,6 @@ package org.opensearch.knn.index.engine.faiss;
 import com.google.common.collect.ImmutableSet;
 import org.opensearch.knn.index.SpaceType;
 import org.opensearch.knn.index.VectorDataType;
-import org.opensearch.knn.index.engine.AbstractFaissMethod;
 import org.opensearch.knn.index.engine.MethodComponent;
 import org.opensearch.knn.index.engine.MethodComponentContext;
 import org.opensearch.knn.index.engine.Parameter;
