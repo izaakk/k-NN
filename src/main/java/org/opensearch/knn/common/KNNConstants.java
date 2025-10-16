@@ -17,6 +17,8 @@ public class KNNConstants {
     public static final String NAME = "name";
     public static final String PARAMETERS = "parameters";
     public static final String METHOD_HNSW = "hnsw";
+    public static final String METHOD_SVS_FLAT = "svs_flat";
+    public static final String METHOD_SVS_VAMANA = "svs_vamana";
     public static final String TYPE = "type";
     public static final String TYPE_NESTED = "nested";
     public static final String PATH = "path";
@@ -34,6 +36,9 @@ public class KNNConstants {
     public static final String METHOD_PARAMETER_EF_SEARCH = "ef_search";
     public static final String METHOD_PARAMETER_EF_CONSTRUCTION = "ef_construction";
     public static final String METHOD_PARAMETER_M = "m";
+    public static final String METHOD_PARAMETER_DEGREE = "degree";
+    public static final String METHOD_PARAMETER_SEARCH_WINDOW_SIZE = "search_window_size";
+    public static final String METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY = "search_buffer_capacity";
     public static final String METHOD_IVF = "ivf";
     public static final String METHOD_PARAMETER_NLIST = "nlist";
     public static final String METHOD_PARAMETER_SPACE_TYPE = "space_type"; // used for mapping parameter
@@ -129,10 +134,15 @@ public class KNNConstants {
     public static final String FAISS_IVF_DESCRIPTION = "IVF";
     public static final String FAISS_FLAT_DESCRIPTION = "Flat";
     public static final String FAISS_PQ_DESCRIPTION = "PQ";
+    public static final String FAISS_SVS_FLAT_DESCRIPTION = "SVSFlat";
+    public static final String FAISS_SVS_VAMANA_DESCRIPTION = "SVSVamana";
     public static final String ENCODER_SQ = "sq";
     public static final String FAISS_SQ_DESCRIPTION = "SQ";
     public static final String FAISS_SQ_TYPE = "type";
     public static final String FAISS_SQ_ENCODER_FP16 = "fp16";
+    public static final String FAISS_SVS_ENCODER_FP16 = "svs_fp16";
+    public static final String FAISS_SVS_ENCODER_LVQ = "lvq";
+    public static final String FAISS_SVS_ENCODER_LEANVEC = "leanvec";
     public static final List<String> FAISS_SQ_ENCODER_TYPES = List.of(FAISS_SQ_ENCODER_FP16);
     public static final String FAISS_SIGNED_BYTE_SQ = "SQ8_direct_signed";
     public static final String FAISS_SQ_CLIP = "clip";

@@ -24,6 +24,7 @@ import java.util.function.Function;
 
 import static org.opensearch.knn.common.KNNConstants.METHOD_HNSW;
 import static org.opensearch.knn.common.KNNConstants.METHOD_IVF;
+import static org.opensearch.knn.common.KNNConstants.METHOD_SVS_FLAT;
 import static org.opensearch.knn.common.KNNConstants.NAME;
 
 /**
@@ -62,7 +63,14 @@ public class Faiss extends NativeLibrary {
         Function<Float, Float>>builder().put(SpaceType.COSINESIMIL, distance -> 1 - distance).build();
 
     // Package private so that the method resolving logic can access the methods
-    final static Map<String, KNNMethod> METHODS = ImmutableMap.of(METHOD_HNSW, new FaissHNSWMethod(), METHOD_IVF, new FaissIVFMethod());
+    final static Map<String, KNNMethod> METHODS = ImmutableMap.of(
+        METHOD_HNSW,
+        new FaissHNSWMethod(),
+        METHOD_IVF,
+        new FaissIVFMethod(),
+        METHOD_SVS_FLAT,
+        new FaissSVSFlatMethod()
+    );
 
     public final static Faiss INSTANCE = new Faiss(
         METHODS,
