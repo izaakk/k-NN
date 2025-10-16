@@ -454,12 +454,20 @@ jlong knn_jni::faiss_wrapper::LoadIndexWithStream(faiss::IOReader* ioReader) {
         throw std::runtime_error("IOReader cannot be null");
     }
 
+    std::cerr << "[DEBUG] LoadIndexWithStream: Starting index load..." << std::endl;
+    
     faiss::Index* indexReader =
       faiss::read_index(ioReader,
                         faiss::IO_FLAG_READ_ONLY
                         | faiss::IO_FLAG_PQ_SKIP_SDC_TABLE
                         | faiss::IO_FLAG_SKIP_PRECOMPUTE_TABLE);
 
+    std::cerr << "[DEBUG] LoadIndexWithStream: Index loaded successfully" << std::endl;
+    std::cerr << "[DEBUG]   - Dimension: " << indexReader->d << std::endl;
+    std::cerr << "[DEBUG]   - Total vectors: " << indexReader->ntotal << std::endl;
+    std::cerr << "[DEBUG]   - Metric type: " << indexReader->metric_type << std::endl;
+    std::cerr << "[DEBUG]   - Index pointer: " << (void*)indexReader << std::endl;
+    
     return (jlong) indexReader;
 }
 jlong knn_jni::faiss_wrapper::LoadIndexWithStreamADCParams(faiss::IOReader* ioReader, knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env, jobject methodParamsJ) {
