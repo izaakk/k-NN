@@ -10,24 +10,22 @@ import org.opensearch.knn.index.SpaceType;
 import org.opensearch.knn.index.VectorDataType;
 import org.opensearch.knn.index.engine.MethodComponent;
 import org.opensearch.knn.index.engine.MethodComponentContext;
-import org.opensearch.knn.index.engine.Parameter;
 
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
-import static org.opensearch.knn.common.KNNConstants.ENCODER_FLAT;
 import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_FLAT_DESCRIPTION;
-import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
 import static org.opensearch.knn.common.KNNConstants.METHOD_SVS_FLAT;
 
 /**
- * SVS Flat method implementation. Provides exhaustive (brute force) search with optional compression.
+ * SVS Flat method implementation. Provides exhaustive (brute force) search.
  * 
- * Supported index descriptions:
- * - "SVSFlat" (FP32, no compression)
- * - "SVSFlat,FP16" (FP16 compression, 2x reduction)
+ * Phase 1 (Current): Basic FP32 flat index without compression
+ * - Supported index description: "SVSFlat"
+ * 
+ * Phase 2 (Future): Compression support will be added
+ * - Planned: "SVSFlat,FP16", "SVSFlat,LVQ4x4", "SVSFlat,LeanVec8x8", etc.
  * 
  * Note: IndexSVSFlat does NOT support range_search(). Use SVS Vamana for range queries.
  */
@@ -36,11 +34,6 @@ public class FaissSVSFlatMethod extends AbstractFaissMethod {
     private static final Set<VectorDataType> SUPPORTED_DATA_TYPES = ImmutableSet.of(VectorDataType.FLOAT);
 
     public final static List<SpaceType> SUPPORTED_SPACES = Arrays.asList(SpaceType.L2, SpaceType.INNER_PRODUCT);
-
-    private final static MethodComponentContext DEFAULT_ENCODER_CONTEXT = new MethodComponentContext(
-        ENCODER_FLAT,
-        Collections.emptyMap()
-    );
 
     final static MethodComponent METHOD_COMPONENT = initMethodComponent();
 
@@ -54,29 +47,21 @@ public class FaissSVSFlatMethod extends AbstractFaissMethod {
     private static MethodComponent initMethodComponent() {
         return MethodComponent.Builder.builder(METHOD_SVS_FLAT)
             .addSupportedDataTypes(SUPPORTED_DATA_TYPES)
-            .addParameter(METHOD_ENCODER_PARAMETER, initEncoderParameter())
+            // Note: Encoder parameter will be added in Phase 2 (FP16, LVQ, LeanVec support)
             .setKnnLibraryIndexingContextGenerator(
                 ((methodComponent, methodComponentContext, knnMethodConfigContext) -> {
-                    // Build index description: "SVSFlat" or "SVSFlat,FP16"
+                    // Build index description: Just "SVSFlat" for now
+                    // Phase 2 will support "SVSFlat,FP16", "SVSFlat,LVQ4x4", etc.
                     MethodAsMapBuilder methodAsMapBuilder = MethodAsMapBuilder.builder(
                         FAISS_SVS_FLAT_DESCRIPTION,
                         methodComponent,
                         methodComponentContext,
                         knnMethodConfigContext
-                    ).addParameter(METHOD_ENCODER_PARAMETER, ",", "");
+                    );
 
                     return methodAsMapBuilder.build();
                 })
             )
             .build();
-    }
-
-    private static Parameter.MethodComponentContextParameter initEncoderParameter() {
-        // For now, only support Flat encoder. FP16 encoder will be added in Phase 2
-        return new Parameter.MethodComponentContextParameter(
-            METHOD_ENCODER_PARAMETER,
-            DEFAULT_ENCODER_CONTEXT,
-            Collections.singletonMap(FaissHNSWMethod.FLAT_ENCODER.getName(), FaissHNSWMethod.FLAT_ENCODER.getMethodComponent())
-        );
     }
 }
