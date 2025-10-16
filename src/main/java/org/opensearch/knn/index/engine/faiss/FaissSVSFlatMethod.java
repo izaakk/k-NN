@@ -41,7 +41,7 @@ public class FaissSVSFlatMethod extends AbstractFaissMethod {
      * Constructor for FaissSVSFlatMethod
      */
     public FaissSVSFlatMethod() {
-        super(METHOD_COMPONENT, Set.copyOf(SUPPORTED_SPACES), null);
+        super(METHOD_COMPONENT, Set.copyOf(SUPPORTED_SPACES), new FaissSVSFlatSearchContext());
     }
 
     private static MethodComponent initMethodComponent() {
