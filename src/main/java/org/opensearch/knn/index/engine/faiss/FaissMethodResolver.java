@@ -73,10 +73,9 @@ public class FaissMethodResolver extends AbstractMethodResolver {
             encoderMap = FaissHNSWMethod.SUPPORTED_ENCODERS;
         } else if (METHOD_SVS_FLAT.equals(methodName)) {
             method = FaissSVSFlatMethod.METHOD_COMPONENT;
-            encoderMap = FaissSVSFlatMethod.METHOD_COMPONENT.getParameters().containsKey(METHOD_ENCODER_PARAMETER)
-                ? ((Parameter.MethodComponentContextParameter) FaissSVSFlatMethod.METHOD_COMPONENT.getParameters()
-                    .get(METHOD_ENCODER_PARAMETER)).getMethodComponentMap()
-                : new HashMap<>();
+            // SVS Flat currently only supports FLAT encoder, but we'll use HNSW encoders
+            // for future compatibility (FP16, LVQ, LeanVec support in Phase 2)
+            encoderMap = FaissHNSWMethod.SUPPORTED_ENCODERS;
         } else {
             // Default to IVF for backward compatibility
             method = IVF_COMPONENT;
