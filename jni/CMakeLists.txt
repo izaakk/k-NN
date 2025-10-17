@@ -172,7 +172,7 @@ if ("${WIN32}" STREQUAL "")
                 ${TARGET_LIB_NMSLIB}
                 ${TARGET_LIB_COMMON}
                 ${TARGET_LIB_UTIL}
-                gfortran
+                /usr/lib/x86_64-linux-gnu/libgfortran.so.5
         )
 
         target_include_directories(jni_test PRIVATE
