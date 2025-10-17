@@ -2644,10 +2644,13 @@ public class FaissIT extends KNNRestTestCase {
         String mapping = builder.toString();
         createKnnIndex(indexName, mapping);
 
-        // Index test vectors
-        addKnnDoc(indexName, "1", fieldName, new float[] { 1.0f, 1.0f, 1.0f });
-        addKnnDoc(indexName, "2", fieldName, new float[] { 2.0f, 2.0f, 2.0f });
-        addKnnDoc(indexName, "3", fieldName, new float[] { 3.0f, 3.0f, 3.0f });
+        // Index test vectors using bulk API to avoid per-document refreshes
+        // which would cause multiple segment flushes and file overwrites for SVS
+        bulkAddKnnDocs(indexName, fieldName, new float[][] {
+            { 1.0f, 1.0f, 1.0f },
+            { 2.0f, 2.0f, 2.0f },
+            { 3.0f, 3.0f, 3.0f }
+        }, 3);
 
         refreshAllNonSystemIndices();
         assertEquals(3, getDocCount(indexName));
