@@ -45,18 +45,25 @@ class FaissOpenSearchIOReader final : public faiss::IOReader {
       return 0;
     }
 
-    // Check how many bytes are remaining
+    // Check remaining bytes to handle partial reads
     int64_t available = mediator->remainingBytes();
-    size_t bytes_to_read = std::min(static_cast<size_t>(total_bytes), static_cast<size_t>(available));
-    
-    if (bytes_to_read > 0) {
-      // Mediator calls IndexInput, then copy read bytes to `ptr`.
-      mediator->copyBytes(bytes_to_read, (uint8_t *) ptr);
+    if (available == 0) {
+      // No data available - return 0 items read (EOF)
+      return 0;
     }
     
-    // Return number of complete items read (not bytes)
-    size_t items_read = bytes_to_read / size;
-    return items_read;
+    // Calculate how many complete items we can read
+    size_t bytes_to_read = std::min(static_cast<size_t>(total_bytes), static_cast<size_t>(available));
+    size_t items_to_read = bytes_to_read / size;  // Number of complete items
+    size_t actual_bytes = items_to_read * size;    // Adjusted to read complete items only
+    
+    if (actual_bytes > 0) {
+      // Mediator calls IndexInput, then copy read bytes to `ptr`.
+      mediator->copyBytes(actual_bytes, (uint8_t *) ptr);
+    }
+    
+    // Return number of complete items read
+    return items_to_read;
   }
 
   int filedescriptor() final {
