@@ -53,12 +53,17 @@ public:
     
     size_t operator()(void* ptr, size_t size, size_t nitems) override {
         size_t total_bytes = size * nitems;
-        if (position + total_bytes > buffer.size()) {
-            throw std::runtime_error("Read beyond buffer size");
+        size_t available = buffer.size() - position;
+        size_t to_read = std::min(total_bytes, available);
+        
+        if (to_read > 0) {
+            std::memcpy(ptr, buffer.data() + position, to_read);
+            position += to_read;
         }
-        std::memcpy(ptr, buffer.data() + position, total_bytes);
-        position += total_bytes;
-        return nitems;
+        
+        // Return number of complete items read (not bytes)
+        size_t items_read = to_read / size;
+        return items_read;
     }
     
     void reset() { position = 0; }
