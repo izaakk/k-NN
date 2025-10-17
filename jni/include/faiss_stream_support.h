@@ -45,25 +45,34 @@ class FaissOpenSearchIOReader final : public faiss::IOReader {
       return 0;
     }
 
-    // Check remaining bytes to handle partial reads
-    int64_t available = mediator->remainingBytes();
-    if (available == 0) {
-      // No data available - return 0 items read (EOF)
+    // Don't pre-check remainingBytes() - it may not be accurate due to buffering
+    // or timing issues. Instead, try to read and handle exceptions.
+    // The mediator's copyBytes() will loop until all bytes are read or throw IOException.
+    try {
+      mediator->copyBytes(total_bytes, (uint8_t *) ptr);
+      // Successfully read all requested bytes
+      return nitems;
+    } catch (const std::exception& e) {
+      // Read failed - could be EOF or other error
+      // Check if any data is available for partial read
+      int64_t available = mediator->remainingBytes();
+      if (available > 0) {
+        // Try to read what's available
+        size_t items_available = available / size;
+        if (items_available > 0) {
+          size_t bytes_available = items_available * size;
+          try {
+            mediator->copyBytes(bytes_available, (uint8_t *) ptr);
+            return items_available;
+          } catch (...) {
+            // Even partial read failed
+            return 0;
+          }
+        }
+      }
+      // No data available or read failed
       return 0;
     }
-    
-    // Calculate how many complete items we can read
-    size_t bytes_to_read = std::min(static_cast<size_t>(total_bytes), static_cast<size_t>(available));
-    size_t items_to_read = bytes_to_read / size;  // Number of complete items
-    size_t actual_bytes = items_to_read * size;    // Adjusted to read complete items only
-    
-    if (actual_bytes > 0) {
-      // Mediator calls IndexInput, then copy read bytes to `ptr`.
-      mediator->copyBytes(actual_bytes, (uint8_t *) ptr);
-    }
-    
-    // Return number of complete items read
-    return items_to_read;
   }
 
   int filedescriptor() final {
