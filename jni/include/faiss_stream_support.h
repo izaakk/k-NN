@@ -90,14 +90,19 @@ class FaissOpenSearchIOWriter final : public faiss::IOWriter {
  public:
   explicit FaissOpenSearchIOWriter(NativeEngineIndexOutputMediator *_mediator)
       : faiss::IOWriter(),
-        mediator(knn_jni::util::ParameterCheck::require_non_null(_mediator, "mediator")) {
+        mediator(knn_jni::util::ParameterCheck::require_non_null(_mediator, "mediator")),
+        totalBytesWritten(0) {
     name = "FaissOpenSearchIOWriter";
   }
 
   size_t operator()(const void *ptr, size_t size, size_t nitems) final {
     const auto writeBytes = size * nitems;
     if (writeBytes > 0) {
+      std::cerr << "[FaissWriter] Writing: " << nitems << " items x " << size 
+                << " bytes = " << writeBytes << " total bytes" << std::endl;
       mediator->writeBytes(reinterpret_cast<const uint8_t *>(ptr), writeBytes);
+      totalBytesWritten += writeBytes;
+      std::cerr << "[FaissWriter] Total written so far: " << totalBytesWritten << " bytes" << std::endl;
     }
     return nitems;
   }
@@ -108,11 +113,13 @@ class FaissOpenSearchIOWriter final : public faiss::IOWriter {
   }
 
   void flush() {
+    std::cerr << "[FaissWriter] Flush called, total bytes written: " << totalBytesWritten << std::endl;
     mediator->flush();
   }
 
  private:
   NativeEngineIndexOutputMediator *mediator;
+  size_t totalBytesWritten;
 };  // class FaissOpenSearchIOWriter
 
 
