@@ -40,12 +40,23 @@ class FaissOpenSearchIOReader final : public faiss::IOReader {
   }
 
   size_t operator()(void *ptr, size_t size, size_t nitems) final {
-    const auto readBytes = size * nitems;
-    if (readBytes > 0) {
-      // Mediator calls IndexInput, then copy read bytes to `ptr`.
-      mediator->copyBytes(readBytes, (uint8_t *) ptr);
+    const auto total_bytes = size * nitems;
+    if (total_bytes == 0 || size == 0) {
+      return 0;
     }
-    return nitems;
+
+    // Check how many bytes are remaining
+    int64_t available = mediator->remainingBytes();
+    size_t bytes_to_read = std::min(static_cast<size_t>(total_bytes), static_cast<size_t>(available));
+    
+    if (bytes_to_read > 0) {
+      // Mediator calls IndexInput, then copy read bytes to `ptr`.
+      mediator->copyBytes(bytes_to_read, (uint8_t *) ptr);
+    }
+    
+    // Return number of complete items read (not bytes)
+    size_t items_read = bytes_to_read / size;
+    return items_read;
   }
 
   int filedescriptor() final {
