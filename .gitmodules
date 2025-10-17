@@ -3,5 +3,5 @@
 	url = https://github.com/nmslib/nmslib.git
 [submodule "jni/external/faiss"]
 	path = jni/external/faiss
-	url = https://github.com/ahuber21/faiss.git
+	url = https://github.com/izaakk/faiss.git
 	branch = svs-io
