@@ -185,6 +185,7 @@ if ("${WIN32}" STREQUAL "")
                 ${gtest_SOURCE_DIR}/include
                 ${gmock_SOURCE_DIR}/include)
 
+        target_compile_definitions(jni_test PRIVATE FAISS_ENABLE_SVS)
 
         set_target_properties(jni_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/bin)
     endif ()
