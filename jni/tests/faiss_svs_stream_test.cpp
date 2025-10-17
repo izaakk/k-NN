@@ -4,7 +4,6 @@
 // this file be licensed under the Apache-2.0 license or a
 // compatible open source license.
 
-#include "faiss_stream_support.h"
 #include "test_util.h"
 
 #include <gtest/gtest.h>
@@ -16,59 +15,54 @@
 #ifdef FAISS_ENABLE_SVS
 #include <faiss/svs/IndexSVSFlat.h>
 #include <faiss/index_io.h>
-
-using knn_jni::stream::FaissOpenSearchIOReader;
-using knn_jni::stream::FaissOpenSearchIOWriter;
-using knn_jni::stream::NativeEngineIndexInputMediator;
-using knn_jni::stream::NativeEngineIndexOutputMediator;
+#include <faiss/impl/io.h>
 
 /**
- * Mock IOWriter that writes to a vector buffer (simulates Lucene IndexOutput)
+ * Simple IOWriter that writes to a vector buffer.
+ * This directly implements faiss::IOWriter interface, avoiding the need for JNI mediators.
+ * Similar to the approach used in the standalone test_svs_knn_exact.cpp
  */
-class MockIOWriterToBuffer : public NativeEngineIndexOutputMediator {
+class BufferIOWriter : public faiss::IOWriter {
 private:
-    std::vector<uint8_t> buffer;
+    std::vector<uint8_t>& buffer;
     
 public:
-    void writeBytes(const uint8_t* bytes, int32_t length) override {
-        buffer.insert(buffer.end(), bytes, bytes + length);
-    }
+    explicit BufferIOWriter(std::vector<uint8_t>& buf) : buffer(buf) {}
     
-    void flush() override {
-        // No-op for testing
+    size_t operator()(const void* ptr, size_t size, size_t nitems) override {
+        const uint8_t* bytes = static_cast<const uint8_t*>(ptr);
+        size_t total_bytes = size * nitems;
+        buffer.insert(buffer.end(), bytes, bytes + total_bytes);
+        return nitems;
     }
-    
-    const std::vector<uint8_t>& getBuffer() const { return buffer; }
-    size_t size() const { return buffer.size(); }
-    void clear() { buffer.clear(); }
 };
 
 /**
- * Mock IOReader that reads from a vector buffer (simulates Lucene IndexInput)
+ * Simple IOReader that reads from a vector buffer.
+ * This directly implements faiss::IOReader interface, avoiding the need for JNI mediators.
+ * Similar to the approach used in the standalone test_svs_knn_exact.cpp
  */
-class MockIOReaderFromBuffer : public NativeEngineIndexInputMediator {
+class BufferIOReader : public faiss::IOReader {
 private:
     const std::vector<uint8_t>& buffer;
     size_t position;
-    std::vector<uint8_t> tempBuffer;
     
 public:
-    explicit MockIOReaderFromBuffer(const std::vector<uint8_t>& buf) 
-        : buffer(buf), position(0), tempBuffer(1024 * 1024) {}  // 1MB temp buffer
+    explicit BufferIOReader(const std::vector<uint8_t>& buf) 
+        : buffer(buf), position(0) {}
     
-    void copyBytes(int32_t length, uint8_t* destination) override {
-        if (position + length > buffer.size()) {
+    size_t operator()(void* ptr, size_t size, size_t nitems) override {
+        size_t total_bytes = size * nitems;
+        if (position + total_bytes > buffer.size()) {
             throw std::runtime_error("Read beyond buffer size");
         }
-        std::memcpy(destination, buffer.data() + position, length);
-        position += length;
-    }
-    
-    int64_t remainingBytes() override {
-        return buffer.size() - position;
+        std::memcpy(ptr, buffer.data() + position, total_bytes);
+        position += total_bytes;
+        return nitems;
     }
     
     void reset() { position = 0; }
+    size_t getPosition() const { return position; }
 };
 
 /**
@@ -94,20 +88,19 @@ TEST(FaissSVSStreamTest, SVSFlat_SerializeDeserialize_BasicFlow) {
     ASSERT_EQ(originalIndex.ntotal, numVectors);
     ASSERT_EQ(originalIndex.d, dimension);
     
-    // Serialize using FaissOpenSearchIOWriter
-    MockIOWriterToBuffer writerMediator;
-    FaissOpenSearchIOWriter writer(&writerMediator);
+    // Serialize using BufferIOWriter
+    std::vector<uint8_t> buffer;
+    BufferIOWriter writer(buffer);
     
     ASSERT_NO_THROW({
         faiss::write_index(&originalIndex, &writer);
     }) << "Serialization should succeed";
     
-    ASSERT_GT(writerMediator.size(), 0) << "Data should have been written";
-    std::cout << "[TEST] Wrote " << writerMediator.size() << " bytes" << std::endl;
+    ASSERT_GT(buffer.size(), 0) << "Data should have been written";
+    std::cout << "[TEST] Wrote " << buffer.size() << " bytes" << std::endl;
     
-    // Deserialize using FaissOpenSearchIOReader
-    MockIOReaderFromBuffer readerMediator(writerMediator.getBuffer());
-    FaissOpenSearchIOReader reader(&readerMediator);
+    // Deserialize using BufferIOReader
+    BufferIOReader reader(buffer);
     
     faiss::Index* readIndex = nullptr;
     ASSERT_NO_THROW({
@@ -158,15 +151,14 @@ TEST(FaissSVSStreamTest, SVSFlat_MultipleCycles) {
     
     // Perform 3 serialize/deserialize cycles
     for (int cycle = 0; cycle < 3; cycle++) {
-        MockIOWriterToBuffer writerMediator;
-        FaissOpenSearchIOWriter writer(&writerMediator);
+        std::vector<uint8_t> buffer;
+        BufferIOWriter writer(buffer);
         
         ASSERT_NO_THROW({
             faiss::write_index(currentIndex, &writer);
         }) << "Cycle " << cycle << " serialization failed";
         
-        MockIOReaderFromBuffer readerMediator(writerMediator.getBuffer());
-        FaissOpenSearchIOReader reader(&readerMediator);
+        BufferIOReader reader(buffer);
         
         faiss::Index* newIndex = nullptr;
         ASSERT_NO_THROW({
@@ -203,18 +195,17 @@ TEST(FaissSVSStreamTest, SVSFlat_LargeIndex) {
     faiss::IndexSVSFlat originalIndex(dimension, faiss::METRIC_L2);
     originalIndex.add(numVectors, data.data());
     
-    MockIOWriterToBuffer writerMediator;
-    FaissOpenSearchIOWriter writer(&writerMediator);
+    std::vector<uint8_t> buffer;
+    BufferIOWriter writer(buffer);
     
     ASSERT_NO_THROW({
         faiss::write_index(&originalIndex, &writer);
     });
     
-    std::cout << "[TEST] Large index serialized: " << writerMediator.size() 
-              << " bytes (" << (writerMediator.size() / 1024.0 / 1024.0) << " MB)" << std::endl;
+    std::cout << "[TEST] Large index serialized: " << buffer.size() 
+              << " bytes (" << (buffer.size() / 1024.0 / 1024.0) << " MB)" << std::endl;
     
-    MockIOReaderFromBuffer readerMediator(writerMediator.getBuffer());
-    FaissOpenSearchIOReader reader(&readerMediator);
+    BufferIOReader reader(buffer);
     
     faiss::Index* readIndex = nullptr;
     ASSERT_NO_THROW({
@@ -239,17 +230,16 @@ TEST(FaissSVSStreamTest, SVSFlat_EmptyIndex) {
     
     ASSERT_EQ(originalIndex.ntotal, 0);
     
-    MockIOWriterToBuffer writerMediator;
-    FaissOpenSearchIOWriter writer(&writerMediator);
+    std::vector<uint8_t> buffer;
+    BufferIOWriter writer(buffer);
     
     ASSERT_NO_THROW({
         faiss::write_index(&originalIndex, &writer);
     });
     
-    ASSERT_GT(writerMediator.size(), 0) << "Even empty index should write metadata";
+    ASSERT_GT(buffer.size(), 0) << "Even empty index should write metadata";
     
-    MockIOReaderFromBuffer readerMediator(writerMediator.getBuffer());
-    FaissOpenSearchIOReader reader(&readerMediator);
+    BufferIOReader reader(buffer);
     
     faiss::Index* readIndex = nullptr;
     ASSERT_NO_THROW({
@@ -293,12 +283,11 @@ TEST(FaissSVSStreamTest, SVSFlat_SearchAfterDeserialization) {
     originalIndex.search(1, query.data(), k, originalDistances.data(), originalLabels.data());
     
     // Serialize and deserialize
-    MockIOWriterToBuffer writerMediator;
-    FaissOpenSearchIOWriter writer(&writerMediator);
+    std::vector<uint8_t> buffer;
+    BufferIOWriter writer(buffer);
     faiss::write_index(&originalIndex, &writer);
     
-    MockIOReaderFromBuffer readerMediator(writerMediator.getBuffer());
-    FaissOpenSearchIOReader reader(&readerMediator);
+    BufferIOReader reader(buffer);
     faiss::Index* readIndex = faiss::read_index(&reader, faiss::IO_FLAG_READ_ONLY);
     
     // Perform the same search on deserialized index
