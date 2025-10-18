@@ -179,10 +179,18 @@ public abstract class NativeMemoryEntryContext<T extends NativeMemoryAllocation>
             // Prepare for opening index input from directory.
             final Directory directory = this.getDirectory();
 
+            // DEBUG: Log the filename being opened
+            log.info("[KNN DEBUG] Opening vector file: {}", vectorFileName);
+            log.info("[KNN DEBUG] Directory type: {}", directory.getClass().getName());
+            log.info("[KNN DEBUG] Directory toString: {}", directory);
+
             // Try to open an index input then pass it down to native engine for loading an index.
             try {
-                indexSizeKb = Math.toIntExact(directory.fileLength(vectorFileName) / 1024);
+                long fileLength = directory.fileLength(vectorFileName);
+                log.info("[KNN DEBUG] File length: {} bytes", fileLength);
+                indexSizeKb = Math.toIntExact(fileLength / 1024);
                 readStream = directory.openInput(vectorFileName, IOContext.READONCE);
+                log.info("[KNN DEBUG] Successfully opened IndexInput: {}", readStream.getClass().getName());
                 readStream.seek(0);
                 indexInputWithBuffer = new IndexInputWithBuffer(readStream);
                 indexGraphFileOpened = true;
