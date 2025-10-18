@@ -460,6 +460,7 @@ jlong knn_jni::faiss_wrapper::LoadIndexWithStream(faiss::IOReader* ioReader) {
     // This prevents BufferedIOReader from consuming data needed by outer IndexIDMap
     std::cerr << "[DEBUG] LoadIndexWithStream: Reading all data into memory first..." << std::endl;
     faiss::VectorIOReader vectorReader;
+    vectorReader.name = "VectorIOReader(from FaissOpenSearchIOReader)";
     std::vector<uint8_t> buffer(1024 * 1024); // 1MB buffer for reading
     size_t totalBytesRead = 0;
     
@@ -473,13 +474,18 @@ jlong knn_jni::faiss_wrapper::LoadIndexWithStream(faiss::IOReader* ioReader) {
     }
     
     std::cerr << "[DEBUG] LoadIndexWithStream: Read " << totalBytesRead << " bytes into memory" << std::endl;
+    std::cerr << "[DEBUG] LoadIndexWithStream: VectorIOReader contains " << vectorReader.data.size() << " bytes" << std::endl;
+    std::cerr << "[DEBUG] LoadIndexWithStream: VectorIOReader.rp = " << vectorReader.rp << std::endl;
     
     // Now read the index from the in-memory buffer
+    std::cerr << "[DEBUG] LoadIndexWithStream: About to call faiss::read_index with VectorIOReader..." << std::endl;
     faiss::Index* indexReader =
       faiss::read_index(&vectorReader,
                         faiss::IO_FLAG_READ_ONLY
                         | faiss::IO_FLAG_PQ_SKIP_SDC_TABLE
                         | faiss::IO_FLAG_SKIP_PRECOMPUTE_TABLE);
+    
+    std::cerr << "[DEBUG] LoadIndexWithStream: After read_index, VectorIOReader.rp = " << vectorReader.rp << std::endl;
 
     std::cerr << "[DEBUG] LoadIndexWithStream: Index loaded successfully" << std::endl;
     std::cerr << "[DEBUG]   - Dimension: " << indexReader->d << std::endl;
