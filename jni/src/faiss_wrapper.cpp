@@ -456,8 +456,27 @@ jlong knn_jni::faiss_wrapper::LoadIndexWithStream(faiss::IOReader* ioReader) {
 
     std::cerr << "[DEBUG] LoadIndexWithStream: Starting index load..." << std::endl;
     
+    // FIX: Pre-read all data into memory to avoid BufferedIOReader over-consumption bug
+    // This prevents BufferedIOReader from consuming data needed by outer IndexIDMap
+    std::cerr << "[DEBUG] LoadIndexWithStream: Reading all data into memory first..." << std::endl;
+    faiss::VectorIOReader vectorReader;
+    std::vector<uint8_t> buffer(1024 * 1024); // 1MB buffer for reading
+    size_t totalBytesRead = 0;
+    
+    while (true) {
+        size_t bytesRead = (*ioReader)(buffer.data(), 1, buffer.size());
+        if (bytesRead == 0) {
+            break; // EOF reached
+        }
+        vectorReader.data.insert(vectorReader.data.end(), buffer.data(), buffer.data() + bytesRead);
+        totalBytesRead += bytesRead;
+    }
+    
+    std::cerr << "[DEBUG] LoadIndexWithStream: Read " << totalBytesRead << " bytes into memory" << std::endl;
+    
+    // Now read the index from the in-memory buffer
     faiss::Index* indexReader =
-      faiss::read_index(ioReader,
+      faiss::read_index(&vectorReader,
                         faiss::IO_FLAG_READ_ONLY
                         | faiss::IO_FLAG_PQ_SKIP_SDC_TABLE
                         | faiss::IO_FLAG_SKIP_PRECOMPUTE_TABLE);
