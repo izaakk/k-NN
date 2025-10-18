@@ -6,6 +6,7 @@
 package org.opensearch.knn.index.store;
 
 import lombok.NonNull;
+import org.apache.lucene.codecs.CodecUtil;
 import org.apache.lucene.store.IndexInput;
 
 import java.io.IOException;
@@ -24,7 +25,9 @@ public class IndexInputWithBuffer {
 
     public IndexInputWithBuffer(@NonNull IndexInput indexInput) {
         this.indexInput = indexInput;
-        this.contentLength = indexInput.length();
+        // Exclude Lucene's CodecUtil footer from the content length that native engines can read
+        // The footer is added by CodecUtil.writeFooter() during index creation
+        this.contentLength = indexInput.length() - CodecUtil.footerLength();
     }
 
     /**
