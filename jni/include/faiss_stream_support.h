@@ -51,7 +51,8 @@ class FaissOpenSearchIOReader final : public faiss::IOReader {
               << " bytes = " << total_bytes << " total, available=" << available << std::endl;
 
     if (available == 0) {
-      std::cerr << "[FaissReader] EOF: no data available" << std::endl;
+      std::cerr << "[FaissReader] ⚠️  EOF REACHED: Requested " << nitems << " items but 0 bytes available" << std::endl;
+      std::cerr << "[FaissReader] ⚠️  This may cause 'ret == (1)' assertion if caller expects 1 item" << std::endl;
       return 0;
     }
     
@@ -63,10 +64,18 @@ class FaissOpenSearchIOReader final : public faiss::IOReader {
     std::cerr << "[FaissReader] Reading: " << items_to_read << " items x " << size 
               << " bytes = " << actual_bytes << " bytes" << std::endl;
     
+    if (items_to_read < nitems) {
+      std::cerr << "[FaissReader] ⚠️  PARTIAL READ: Requested " << nitems 
+                << " items but can only read " << items_to_read 
+                << " items (available=" << available << ")" << std::endl;
+    }
+    
     if (actual_bytes > 0) {
       // Mediator calls IndexInput, then copy read bytes to `ptr`.
       mediator->copyBytes(actual_bytes, (uint8_t *) ptr);
-      std::cerr << "[FaissReader] Success: read " << items_to_read << " items" << std::endl;
+      std::cerr << "[FaissReader] Success: read " << items_to_read << " items, returning " << items_to_read << std::endl;
+    } else {
+      std::cerr << "[FaissReader] ⚠️  Zero bytes read, returning 0" << std::endl;
     }
     
     // Return number of complete items read
