@@ -32,6 +32,7 @@ import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
 import static org.opensearch.knn.common.KNNConstants.METHOD_HNSW;
 import static org.opensearch.knn.common.KNNConstants.METHOD_IVF;
 import static org.opensearch.knn.common.KNNConstants.METHOD_SVS_FLAT;
+import static org.opensearch.knn.common.KNNConstants.METHOD_SVS_VAMANA;
 import static org.opensearch.knn.index.engine.faiss.FaissHNSWMethod.HNSW_COMPONENT;
 import static org.opensearch.knn.index.engine.faiss.FaissIVFMethod.IVF_COMPONENT;
 
@@ -74,6 +75,11 @@ public class FaissMethodResolver extends AbstractMethodResolver {
             method = FaissSVSFlatMethod.METHOD_COMPONENT;
             // SVS Flat currently only supports FLAT encoder, but we'll use HNSW encoders
             // for future compatibility (FP16, LVQ, LeanVec support in Phase 2)
+            encoderMap = FaissHNSWMethod.SUPPORTED_ENCODERS;
+        } else if (METHOD_SVS_VAMANA.equals(methodName)) {
+            method = FaissSVSVamanaMethod.METHOD_COMPONENT;
+            // SVS Vamana currently only supports FLAT encoder, but we'll use HNSW encoders
+            // for future compatibility (FP16, LVQ, LeanVec support in Phase 3B)
             encoderMap = FaissHNSWMethod.SUPPORTED_ENCODERS;
         } else {
             // Default to IVF for backward compatibility

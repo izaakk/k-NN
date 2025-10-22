@@ -40,6 +40,14 @@ public final class ParameterValidator {
         }
 
         final List<String> errorMessages = new ArrayList<>();
+        
+        // DEBUG: Log what we're validating
+        org.apache.logging.log4j.LogManager.getLogger(ParameterValidator.class).info(
+            "[PARAM_VALIDATION_DEBUG] Validating parameters. Valid params: {}, Request params: {}", 
+            validParameters.keySet(), 
+            requestParameters.keySet()
+        );
+        
         for (Map.Entry<String, Object> parameter : requestParameters.entrySet()) {
             if (validParameters.containsKey(parameter.getKey())) {
                 final ValidationException parameterValidation = validParameters.get(parameter.getKey())
