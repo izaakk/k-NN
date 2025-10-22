@@ -28,9 +28,9 @@ public final class FaissSVSVamanaSearchContext implements KNNLibrarySearchContex
     public Map<String, Parameter<?>> supportedMethodParameters(QueryContext ctx) {
         return Map.of(
             METHOD_PARAMETER_SEARCH_WINDOW_SIZE,
-            new Parameter.IntegerParameter(METHOD_PARAMETER_SEARCH_WINDOW_SIZE, null, value -> value > 0),
+            new Parameter.IntegerParameter(METHOD_PARAMETER_SEARCH_WINDOW_SIZE, null, (v, context) -> v > 0),
             METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY,
-            new Parameter.IntegerParameter(METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY, null, value -> value > 0)
+            new Parameter.IntegerParameter(METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY, null, (v, context) -> v > 0)
         );
     }
 }

@@ -52,15 +52,15 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
             .addSupportedDataTypes(SUPPORTED_DATA_TYPES)
             .addParameter(
                 METHOD_PARAMETER_DEGREE,
-                new Parameter.IntegerParameter(METHOD_PARAMETER_DEGREE, 64, value -> value > 0 && value <= 256)
+                new Parameter.IntegerParameter(METHOD_PARAMETER_DEGREE, 64, (v, context) -> v > 0 && v <= 256)
             )
             .addParameter(
                 METHOD_PARAMETER_SEARCH_WINDOW_SIZE,
-                new Parameter.IntegerParameter(METHOD_PARAMETER_SEARCH_WINDOW_SIZE, 10, value -> value > 0)
+                new Parameter.IntegerParameter(METHOD_PARAMETER_SEARCH_WINDOW_SIZE, 10, (v, context) -> v > 0)
             )
             .addParameter(
                 METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY,
-                new Parameter.IntegerParameter(METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY, 10, value -> value > 0)
+                new Parameter.IntegerParameter(METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY, 10, (v, context) -> v > 0)
             )
             // Note: Encoder parameter will be added in Phase 3B (FP16, LVQ, LeanVec support)
             .setKnnLibraryIndexingContextGenerator(((methodComponent, methodComponentContext, knnMethodConfigContext) -> {
