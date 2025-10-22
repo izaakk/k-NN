@@ -5,9 +5,14 @@
 
 package org.opensearch.knn.index.engine.faiss;
 
+import org.opensearch.knn.index.VectorDataType;
 import org.opensearch.knn.index.engine.Encoder;
+import org.opensearch.knn.index.engine.KNNMethodConfigContext;
 import org.opensearch.knn.index.engine.MethodComponent;
+import org.opensearch.knn.index.engine.MethodComponentContext;
 import org.opensearch.knn.index.mapper.CompressionLevel;
+
+import java.util.Set;
 
 import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_ENCODER_FP16;
 
@@ -17,23 +22,20 @@ import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_ENCODER_FP16;
  */
 public class FaissSVSFP16Encoder implements Encoder {
 
-    private final static MethodComponent.MethodComponentContext METHOD_COMPONENT_CONTEXT = new MethodComponent.MethodComponentContext(
-        FAISS_SVS_ENCODER_FP16,
-        java.util.Map.of()
-    );
+    private final static MethodComponent METHOD_COMPONENT = MethodComponent.Builder.builder(FAISS_SVS_ENCODER_FP16)
+        .addSupportedDataTypes(Set.of(VectorDataType.FLOAT))
+        .build();
 
     @Override
-    public MethodComponent.MethodComponentContext getMethodComponent() {
-        return METHOD_COMPONENT_CONTEXT;
+    public MethodComponent getMethodComponent() {
+        return METHOD_COMPONENT;
     }
 
     @Override
-    public CompressionLevel getCompressionLevel() {
+    public CompressionLevel calculateCompressionLevel(
+        MethodComponentContext encoderContext,
+        KNNMethodConfigContext knnMethodConfigContext
+    ) {
         return CompressionLevel.x2;
-    }
-
-    @Override
-    public String getName() {
-        return FAISS_SVS_ENCODER_FP16;
     }
 }

@@ -5,64 +5,62 @@
 
 package org.opensearch.knn.index.engine.faiss;
 
+import org.opensearch.knn.index.VectorDataType;
 import org.opensearch.knn.index.engine.Encoder;
+import org.opensearch.knn.index.engine.KNNMethodConfigContext;
 import org.opensearch.knn.index.engine.MethodComponent;
+import org.opensearch.knn.index.engine.MethodComponentContext;
 import org.opensearch.knn.index.engine.Parameter;
 import org.opensearch.knn.index.mapper.CompressionLevel;
 
-import java.util.Map;
 import java.util.Set;
 
 import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_ENCODER_LEANVEC;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_PRIMARY_BITS;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_DIMENSIONS;
 
 /**
  * LeanVec (Adaptive vector quantization) encoder for SVS indexes.
  * Provides adaptive compression with optional dimension specification.
  * 
  * Parameters:
- * - primary_bits: 4 or 8 (default: 4)
- * - residual_bits: 4 or 8 (default: 4)
- * - dimensions: 0 (use all) or positive integer (default: 0)
+ * - primary_bits: bits for primary quantization (1-8, default: 4)
+ * - residual_bits: bits for residual quantization (0-8, default: 4)
+ * - dimensions: dimension count (0 = use all, default: 0, nullable)
  */
 public class FaissSVSLeanVecEncoder implements Encoder {
 
-    private static final String PRIMARY_BITS = "primary_bits";
-    private static final String RESIDUAL_BITS = "residual_bits";
-    private static final String DIMENSIONS = "dimensions";
-    private static final int DEFAULT_PRIMARY_BITS = 4;
-    private static final int DEFAULT_RESIDUAL_BITS = 4;
-    private static final int DEFAULT_DIMENSIONS = 0;  // 0 means use all dimensions
-    private static final Set<Integer> VALID_PRIMARY_BITS = Set.of(4, 8);
-    private static final Set<Integer> VALID_RESIDUAL_BITS = Set.of(4, 8);
-
     private final static MethodComponent METHOD_COMPONENT = MethodComponent.Builder.builder(FAISS_SVS_ENCODER_LEANVEC)
+        .addSupportedDataTypes(Set.of(VectorDataType.FLOAT))
         .addParameter(
-            PRIMARY_BITS,
-            new Parameter.IntegerParameter(PRIMARY_BITS, DEFAULT_PRIMARY_BITS, (v, context) -> VALID_PRIMARY_BITS.contains(v))
+            METHOD_PARAMETER_LEANVEC_PRIMARY_BITS,
+            new Parameter.IntegerParameter(METHOD_PARAMETER_LEANVEC_PRIMARY_BITS, 4, (v, context) -> v >= 1 && v <= 8)
         )
         .addParameter(
-            RESIDUAL_BITS,
-            new Parameter.IntegerParameter(RESIDUAL_BITS, DEFAULT_RESIDUAL_BITS, (v, context) -> VALID_RESIDUAL_BITS.contains(v))
+            METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS,
+            new Parameter.IntegerParameter(METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS, 4, (v, context) -> v >= 0 && v <= 8)
         )
         .addParameter(
-            DIMENSIONS,
-            new Parameter.IntegerParameter(DIMENSIONS, DEFAULT_DIMENSIONS, (v, context) -> v >= 0)
+            METHOD_PARAMETER_LEANVEC_DIMENSIONS,
+            new Parameter.IntegerParameter(METHOD_PARAMETER_LEANVEC_DIMENSIONS, 0, (v, context) -> v >= 0).setNullable(true)
         )
         .build();
 
     @Override
-    public MethodComponent.MethodComponentContext getMethodComponent() {
-        return METHOD_COMPONENT.getMethodComponentContext();
+    public MethodComponent getMethodComponent() {
+        return METHOD_COMPONENT;
     }
 
     @Override
-    public CompressionLevel getCompressionLevel() {
-        return CompressionLevel.x8;  // Adaptive, but typically 8x
+    public CompressionLevel calculateCompressionLevel(
+        MethodComponentContext encoderContext,
+        KNNMethodConfigContext knnMethodConfigContext
+    ) {
+        // LeanVec has adaptive compression, so return NOT_CONFIGURED
+        return CompressionLevel.NOT_CONFIGURED;
     }
-
-    @Override
-    public String getName() {
-        return FAISS_SVS_ENCODER_LEANVEC;
+}
     }
 
     /**

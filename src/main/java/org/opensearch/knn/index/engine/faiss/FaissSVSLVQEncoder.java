@@ -5,57 +5,55 @@
 
 package org.opensearch.knn.index.engine.faiss;
 
+import org.opensearch.knn.index.VectorDataType;
 import org.opensearch.knn.index.engine.Encoder;
+import org.opensearch.knn.index.engine.KNNMethodConfigContext;
 import org.opensearch.knn.index.engine.MethodComponent;
+import org.opensearch.knn.index.engine.MethodComponentContext;
 import org.opensearch.knn.index.engine.Parameter;
 import org.opensearch.knn.index.mapper.CompressionLevel;
 
-import java.util.Map;
 import java.util.Set;
 
 import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_ENCODER_LVQ;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LVQ_PRIMARY_BITS;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LVQ_RESIDUAL_BITS;
 
 /**
  * LVQ (Locally-adaptive Vector Quantization) encoder for SVS indexes.
  * Reduces memory by 8x with configurable bit allocation.
  * 
  * Parameters:
- * - primary_bits: 4 or 8 (default: 4)
- * - residual_bits: 0, 4, or 8 (default: 4)
+ * - primary_bits: bits for primary quantization (1-8, default: 4)
+ * - residual_bits: bits for residual quantization (0-8, default: 4)
  */
 public class FaissSVSLVQEncoder implements Encoder {
 
-    private static final String PRIMARY_BITS = "primary_bits";
-    private static final String RESIDUAL_BITS = "residual_bits";
-    private static final int DEFAULT_PRIMARY_BITS = 4;
-    private static final int DEFAULT_RESIDUAL_BITS = 4;
-    private static final Set<Integer> VALID_PRIMARY_BITS = Set.of(4, 8);
-    private static final Set<Integer> VALID_RESIDUAL_BITS = Set.of(0, 4, 8);
-
     private final static MethodComponent METHOD_COMPONENT = MethodComponent.Builder.builder(FAISS_SVS_ENCODER_LVQ)
+        .addSupportedDataTypes(Set.of(VectorDataType.FLOAT))
         .addParameter(
-            PRIMARY_BITS,
-            new Parameter.IntegerParameter(PRIMARY_BITS, DEFAULT_PRIMARY_BITS, (v, context) -> VALID_PRIMARY_BITS.contains(v))
+            METHOD_PARAMETER_LVQ_PRIMARY_BITS,
+            new Parameter.IntegerParameter(METHOD_PARAMETER_LVQ_PRIMARY_BITS, 4, (v, context) -> v >= 1 && v <= 8)
         )
         .addParameter(
-            RESIDUAL_BITS,
-            new Parameter.IntegerParameter(RESIDUAL_BITS, DEFAULT_RESIDUAL_BITS, (v, context) -> VALID_RESIDUAL_BITS.contains(v))
+            METHOD_PARAMETER_LVQ_RESIDUAL_BITS,
+            new Parameter.IntegerParameter(METHOD_PARAMETER_LVQ_RESIDUAL_BITS, 4, (v, context) -> v >= 0 && v <= 8)
         )
         .build();
 
     @Override
-    public MethodComponent.MethodComponentContext getMethodComponent() {
-        return METHOD_COMPONENT.getMethodComponentContext();
+    public MethodComponent getMethodComponent() {
+        return METHOD_COMPONENT;
     }
 
     @Override
-    public CompressionLevel getCompressionLevel() {
+    public CompressionLevel calculateCompressionLevel(
+        MethodComponentContext encoderContext,
+        KNNMethodConfigContext knnMethodConfigContext
+    ) {
         return CompressionLevel.x8;
     }
-
-    @Override
-    public String getName() {
-        return FAISS_SVS_ENCODER_LVQ;
+}
     }
 
     /**

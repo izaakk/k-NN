@@ -70,11 +70,6 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
         new FaissSVSLeanVecEncoder()
     );
 
-    private static final MethodComponent.MethodComponentContext DEFAULT_ENCODER_CONTEXT = new MethodComponent.MethodComponentContext(
-        ENCODER_FLAT,
-        Map.of()
-    );
-
     final static MethodComponent METHOD_COMPONENT = initMethodComponent();
 
     /**
