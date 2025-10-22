@@ -42,6 +42,13 @@ public class KNNConstants {
     public static final String METHOD_IVF = "ivf";
     public static final String METHOD_PARAMETER_NLIST = "nlist";
     public static final String METHOD_PARAMETER_SPACE_TYPE = "space_type"; // used for mapping parameter
+    
+    // SVS encoder parameters
+    public static final String METHOD_PARAMETER_LVQ_PRIMARY_BITS = "primary_bits";
+    public static final String METHOD_PARAMETER_LVQ_RESIDUAL_BITS = "residual_bits";
+    public static final String METHOD_PARAMETER_LEANVEC_PRIMARY_BITS = "primary_bits";
+    public static final String METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS = "residual_bits";
+    public static final String METHOD_PARAMETER_LEANVEC_DIMENSIONS = "dimensions";
     // used for defining toplevel parameter
     public static final String TOP_LEVEL_PARAMETER_SPACE_TYPE = METHOD_PARAMETER_SPACE_TYPE;
     public static final String TOP_LEVEL_PARAMETER_ENGINE = KNN_ENGINE;
