@@ -121,8 +121,18 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
                 // Add degree parameter to the index description (e.g., "64")
                 methodAsMapBuilder.addParameter(METHOD_PARAMETER_DEGREE, "", "");
                 
-                // Add encoder parameter to the index description (e.g., ",FP16" or ",LVQ4x4")
-                methodAsMapBuilder.addParameter(METHOD_ENCODER_PARAMETER, ",", "");
+                // Add encoder parameter only if it's not Flat (SVS Vamana uses FP32 by default)
+                // For Flat encoder: "SVSVamana64"
+                // For other encoders: "SVSVamana64,FP16", "SVSVamana64,SQ8", etc.
+                Map<String, Object> parameters = methodComponentContext.getParameters();
+                Object encoderParam = parameters.get(METHOD_ENCODER_PARAMETER);
+                if (encoderParam instanceof Map) {
+                    Map<String, Object> encoderMap = (Map<String, Object>) encoderParam;
+                    String encoderName = (String) encoderMap.get("name");
+                    if (encoderName != null && !encoderName.equals(ENCODER_FLAT)) {
+                        methodAsMapBuilder.addParameter(METHOD_ENCODER_PARAMETER, ",", "");
+                    }
+                }
 
                 return methodAsMapBuilder.build();
             }))
