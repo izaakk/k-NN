@@ -1,6 +1,33 @@
 /*
- * Copyright OpenSearch Contributors
- * SPDX-License-Identifier: Apache-2.0
+ * Copyright OpenSearch Contpublic class FaissSVSLeanVecEncoder implements Encoder {
+
+    private final static MethodComponent METHOD_COMPONENT = MethodComponent.Builder.builder(FAISS_SVS_ENCODER_LEANVEC)
+        .addSupportedDataTypes(Set.of(VectorDataType.FLOAT))
+        .addParameter(
+            METHOD_PARAMETER_LEANVEC_PRIMARY_BITS,
+            new Parameter.IntegerParameter(METHOD_PARAMETER_LEANVEC_PRIMARY_BITS, 4, (v, context) -> v > 0 && v <= 8)
+        )
+        .addParameter(
+            METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS,
+            new Parameter.IntegerParameter(METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS, 4, (v, context) -> v > 0 && v <= 8)
+        )
+        .addParameter(
+            METHOD_PARAMETER_LEANVEC_DIMENSIONS,
+            new Parameter.IntegerParameter(METHOD_PARAMETER_LEANVEC_DIMENSIONS, null, (v, context) -> v > 0)
+        )
+        .setKnnLibraryIndexingContextGenerator(
+            ((methodComponent, methodComponentContext, knnMethodConfigContext) -> MethodAsMapBuilder.builder(
+                "LeanVec",
+                methodComponent,
+                methodComponentContext,
+                knnMethodConfigContext
+            )
+                .addParameter(METHOD_PARAMETER_LEANVEC_PRIMARY_BITS, "", "")
+                .addParameter(METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS, "", "")
+                .addParameter(METHOD_PARAMETER_LEANVEC_DIMENSIONS, "", "")
+                .build())
+        )
+        .build();License-Identifier: Apache-2.0
  */
 
 package org.opensearch.knn.index.engine.faiss;

@@ -1,6 +1,28 @@
 /*
- * Copyright OpenSearch Contributors
- * SPDX-License-Identifier: Apache-2.0
+ * Copyright OpenSearch Copublic class FaissSVSLVQEncoder implements Encoder {
+
+    private final static MethodComponent METHOD_COMPONENT = MethodComponent.Builder.builder(FAISS_SVS_ENCODER_LVQ)
+        .addSupportedDataTypes(Set.of(VectorDataType.FLOAT))
+        .addParameter(
+            METHOD_PARAMETER_LVQ_PRIMARY_BITS,
+            new Parameter.IntegerParameter(METHOD_PARAMETER_LVQ_PRIMARY_BITS, 4, (v, context) -> v > 0 && v <= 8)
+        )
+        .addParameter(
+            METHOD_PARAMETER_LVQ_RESIDUAL_BITS,
+            new Parameter.IntegerParameter(METHOD_PARAMETER_LVQ_RESIDUAL_BITS, 4, (v, context) -> v > 0 && v <= 8)
+        )
+        .setKnnLibraryIndexingContextGenerator(
+            ((methodComponent, methodComponentContext, knnMethodConfigContext) -> MethodAsMapBuilder.builder(
+                "LVQ",
+                methodComponent,
+                methodComponentContext,
+                knnMethodConfigContext
+            )
+                .addParameter(METHOD_PARAMETER_LVQ_PRIMARY_BITS, "", "")
+                .addParameter(METHOD_PARAMETER_LVQ_RESIDUAL_BITS, "", "")
+                .build())
+        )
+        .build(); SPDX-License-Identifier: Apache-2.0
  */
 
 package org.opensearch.knn.index.engine.faiss;
