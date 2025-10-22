@@ -14,7 +14,6 @@ import org.opensearch.knn.index.engine.KNNMethodConfigContext;
 import org.opensearch.knn.index.engine.KNNMethodContext;
 import org.opensearch.knn.index.engine.MethodComponent;
 import org.opensearch.knn.index.engine.MethodComponentContext;
-import org.opensearch.knn.index.engine.Parameter;
 import org.opensearch.knn.index.engine.ResolvedMethodContext;
 import org.opensearch.knn.index.engine.TrainingConfigValidationInput;
 import org.opensearch.knn.index.engine.TrainingConfigValidationOutput;
@@ -62,12 +61,12 @@ public class FaissMethodResolver extends AbstractMethodResolver {
             spaceType,
             shouldRequireTraining ? METHOD_IVF : METHOD_HNSW
         );
-        
+
         // Determine which method component to use based on the resolved method name
         String methodName = resolvedKNNMethodContext.getMethodComponentContext().getName();
         MethodComponent method;
         Map<String, Encoder> encoderMap;
-        
+
         if (METHOD_HNSW.equals(methodName)) {
             method = HNSW_COMPONENT;
             encoderMap = FaissHNSWMethod.SUPPORTED_ENCODERS;

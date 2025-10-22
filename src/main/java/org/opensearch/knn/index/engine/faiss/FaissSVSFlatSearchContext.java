@@ -15,7 +15,7 @@ import java.util.Map;
 /**
  * Search context for SVS Flat method. SVS Flat is an exhaustive search method that does not
  * support any search-time parameters (unlike HNSW which has ef_search).
- * 
+ *
  * Phase 2 may add support for search parameters if needed.
  */
 public final class FaissSVSFlatSearchContext implements KNNLibrarySearchContext {

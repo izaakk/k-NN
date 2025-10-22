@@ -9,7 +9,6 @@ import com.google.common.collect.ImmutableSet;
 import org.opensearch.knn.index.SpaceType;
 import org.opensearch.knn.index.VectorDataType;
 import org.opensearch.knn.index.engine.MethodComponent;
-import org.opensearch.knn.index.engine.MethodComponentContext;
 
 import java.util.Arrays;
 import java.util.List;
@@ -20,13 +19,13 @@ import static org.opensearch.knn.common.KNNConstants.METHOD_SVS_FLAT;
 
 /**
  * SVS Flat method implementation. Provides exhaustive (brute force) search.
- * 
+ *
  * Phase 1 (Current): Basic FP32 flat index without compression
  * - Supported index description: "SVSFlat"
- * 
+ *
  * Phase 2 (Future): Compression support will be added
  * - Planned: "SVSFlat,FP16", "SVSFlat,LVQ4x4", "SVSFlat,LeanVec8x8", etc.
- * 
+ *
  * Note: IndexSVSFlat does NOT support range_search(). Use SVS Vamana for range queries.
  */
 public class FaissSVSFlatMethod extends AbstractFaissMethod {
@@ -48,20 +47,18 @@ public class FaissSVSFlatMethod extends AbstractFaissMethod {
         return MethodComponent.Builder.builder(METHOD_SVS_FLAT)
             .addSupportedDataTypes(SUPPORTED_DATA_TYPES)
             // Note: Encoder parameter will be added in Phase 2 (FP16, LVQ, LeanVec support)
-            .setKnnLibraryIndexingContextGenerator(
-                ((methodComponent, methodComponentContext, knnMethodConfigContext) -> {
-                    // Build index description: Just "SVSFlat" for now
-                    // Phase 2 will support "SVSFlat,FP16", "SVSFlat,LVQ4x4", etc.
-                    MethodAsMapBuilder methodAsMapBuilder = MethodAsMapBuilder.builder(
-                        FAISS_SVS_FLAT_DESCRIPTION,
-                        methodComponent,
-                        methodComponentContext,
-                        knnMethodConfigContext
-                    );
+            .setKnnLibraryIndexingContextGenerator(((methodComponent, methodComponentContext, knnMethodConfigContext) -> {
+                // Build index description: Just "SVSFlat" for now
+                // Phase 2 will support "SVSFlat,FP16", "SVSFlat,LVQ4x4", etc.
+                MethodAsMapBuilder methodAsMapBuilder = MethodAsMapBuilder.builder(
+                    FAISS_SVS_FLAT_DESCRIPTION,
+                    methodComponent,
+                    methodComponentContext,
+                    knnMethodConfigContext
+                );
 
-                    return methodAsMapBuilder.build();
-                })
-            )
+                return methodAsMapBuilder.build();
+            }))
             .build();
     }
 }

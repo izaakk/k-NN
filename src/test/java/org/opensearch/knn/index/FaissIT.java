@@ -2646,11 +2646,7 @@ public class FaissIT extends KNNRestTestCase {
 
         // Index test vectors using bulk API to avoid per-document refreshes
         // which would cause multiple segment flushes and file overwrites for SVS
-        bulkAddKnnDocs(indexName, fieldName, new float[][] {
-            { 1.0f, 1.0f, 1.0f },
-            { 2.0f, 2.0f, 2.0f },
-            { 3.0f, 3.0f, 3.0f }
-        }, 3);
+        bulkAddKnnDocs(indexName, fieldName, new float[][] { { 1.0f, 1.0f, 1.0f }, { 2.0f, 2.0f, 2.0f }, { 3.0f, 3.0f, 3.0f } }, 3);
 
         refreshAllNonSystemIndices();
         assertEquals(3, getDocCount(indexName));
@@ -2670,4 +2666,3 @@ public class FaissIT extends KNNRestTestCase {
     }
 
 }
-

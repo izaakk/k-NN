@@ -61,11 +61,7 @@ public class FaissSVSFlatMethodTests extends KNNTestCase {
      * Test that method name is correctly set
      */
     public void testMethodName_whenAccessed_thenReturnsSVSFlat() {
-        assertEquals(
-            "Method component name should be svs_flat",
-            METHOD_SVS_FLAT,
-            FaissSVSFlatMethod.METHOD_COMPONENT.getName()
-        );
+        assertEquals("Method component name should be svs_flat", METHOD_SVS_FLAT, FaissSVSFlatMethod.METHOD_COMPONENT.getName());
     }
 
     /**
