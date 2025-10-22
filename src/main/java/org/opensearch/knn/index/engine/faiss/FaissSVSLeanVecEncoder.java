@@ -15,18 +15,6 @@
             METHOD_PARAMETER_LEANVEC_DIMENSIONS,
             new Parameter.IntegerParameter(METHOD_PARAMETER_LEANVEC_DIMENSIONS, null, (v, context) -> v > 0)
         )
-        .setKnnLibraryIndexingContextGenerator(
-            ((methodComponent, methodComponentContext, knnMethodConfigContext) -> MethodAsMapBuilder.builder(
-                "LeanVec",
-                methodComponent,
-                methodComponentContext,
-                knnMethodConfigContext
-            )
-                .addParameter(METHOD_PARAMETER_LEANVEC_PRIMARY_BITS, "", "")
-                .addParameter(METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS, "", "")
-                .addParameter(METHOD_PARAMETER_LEANVEC_DIMENSIONS, "", "")
-                .build())
-        )
         .build();License-Identifier: Apache-2.0
  */
 
