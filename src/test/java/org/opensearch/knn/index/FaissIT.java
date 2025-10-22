@@ -2665,4 +2665,52 @@ public class FaissIT extends KNNRestTestCase {
         deleteKNNIndex(indexName);
     }
 
+    public void testSVSVamana_whenBasicConfiguration_thenSucceed() throws Exception {
+        String indexName = "test-svs-vamana-basic";
+        String fieldName = "test-field";
+        int dimension = 3;
+        SpaceType spaceType = SpaceType.L2;
+
+        // Create index with SVS Vamana method
+        XContentBuilder builder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("properties")
+            .startObject(fieldName)
+            .field("type", "knn_vector")
+            .field("dimension", dimension)
+            .startObject(KNN_METHOD)
+            .field(NAME, "svs_vamana")
+            .field(METHOD_PARAMETER_SPACE_TYPE, spaceType.getValue())
+            .field(KNN_ENGINE, KNNEngine.FAISS.getName())
+            .startObject("parameters")
+            .field("degree", 64)
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject();
+
+        String mapping = builder.toString();
+        createKnnIndex(indexName, mapping);
+
+        // Index test vectors using bulk API
+        bulkAddKnnDocs(indexName, fieldName, new float[][] { { 1.0f, 1.0f, 1.0f }, { 2.0f, 2.0f, 2.0f }, { 3.0f, 3.0f, 3.0f } }, 3);
+
+        refreshAllNonSystemIndices();
+        assertEquals(3, getDocCount(indexName));
+
+        // Search with a query vector
+        float[] queryVector = new float[] { 1.0f, 1.0f, 1.0f };
+        int k = 2;
+        Response response = searchKNNIndex(indexName, new KNNQueryBuilder(fieldName, queryVector, k), k);
+        String responseBody = EntityUtils.toString(response.getEntity());
+        List<KNNResult> results = parseSearchResponse(responseBody, fieldName);
+
+        // Verify search results - should return 2 nearest neighbors
+        assertEquals(2, results.size());
+
+        // Clean up
+        deleteKNNIndex(indexName);
+    }
+
 }
