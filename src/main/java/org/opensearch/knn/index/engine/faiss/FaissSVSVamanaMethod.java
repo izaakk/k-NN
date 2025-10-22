@@ -10,9 +10,11 @@ import org.opensearch.knn.index.SpaceType;
 import org.opensearch.knn.index.VectorDataType;
 import org.opensearch.knn.index.engine.Encoder;
 import org.opensearch.knn.index.engine.MethodComponent;
+import org.opensearch.knn.index.engine.MethodComponentContext;
 import org.opensearch.knn.index.engine.Parameter;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -68,6 +70,11 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
         new FaissSVSLVQEncoder(),
         FAISS_SVS_ENCODER_LEANVEC,
         new FaissSVSLeanVecEncoder()
+    );
+
+    private final static MethodComponentContext DEFAULT_ENCODER_CONTEXT = new MethodComponentContext(
+        ENCODER_FLAT,
+        Collections.emptyMap()
     );
 
     final static MethodComponent METHOD_COMPONENT = initMethodComponent();

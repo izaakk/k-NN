@@ -43,7 +43,7 @@ public class FaissSVSLeanVecEncoder implements Encoder {
         )
         .addParameter(
             METHOD_PARAMETER_LEANVEC_DIMENSIONS,
-            new Parameter.IntegerParameter(METHOD_PARAMETER_LEANVEC_DIMENSIONS, 0, (v, context) -> v >= 0).setNullable(true)
+            new Parameter.IntegerParameter(METHOD_PARAMETER_LEANVEC_DIMENSIONS, 0, (v, context) -> v >= 0)
         )
         .build();
 
