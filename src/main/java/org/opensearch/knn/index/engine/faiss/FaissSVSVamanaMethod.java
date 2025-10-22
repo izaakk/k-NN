@@ -126,9 +126,9 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
                 // For other encoders: "SVSVamana64,FP16", "SVSVamana64,SQ8", etc.
                 Map<String, Object> parameters = methodComponentContext.getParameters();
                 Object encoderParam = parameters.get(METHOD_ENCODER_PARAMETER);
-                if (encoderParam instanceof Map) {
-                    Map<String, Object> encoderMap = (Map<String, Object>) encoderParam;
-                    String encoderName = (String) encoderMap.get("name");
+                if (encoderParam instanceof MethodComponentContext) {
+                    MethodComponentContext encoderContext = (MethodComponentContext) encoderParam;
+                    String encoderName = encoderContext.getName();
                     if (encoderName != null && !encoderName.equals(ENCODER_FLAT)) {
                         methodAsMapBuilder.addParameter(METHOD_ENCODER_PARAMETER, ",", "");
                     }
