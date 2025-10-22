@@ -61,28 +61,3 @@ public class FaissSVSLeanVecEncoder implements Encoder {
         return CompressionLevel.NOT_CONFIGURED;
     }
 }
-    }
-
-    /**
-     * Generates the LeanVec string for index description.
-     * Format: "LeanVec{primary_bits}x{residual_bits}" or "LeanVec{primary_bits}x{residual_bits}_{dimensions}"
-     * Examples: "LeanVec4x4", "LeanVec4x4_128", "LeanVec8x8_256"
-     */
-    public static String getLeanVecString(Map<String, Object> parameters) {
-        int primaryBits = parameters.containsKey(PRIMARY_BITS) 
-            ? (Integer) parameters.get(PRIMARY_BITS) 
-            : DEFAULT_PRIMARY_BITS;
-        int residualBits = parameters.containsKey(RESIDUAL_BITS) 
-            ? (Integer) parameters.get(RESIDUAL_BITS) 
-            : DEFAULT_RESIDUAL_BITS;
-        int dimensions = parameters.containsKey(DIMENSIONS) 
-            ? (Integer) parameters.get(DIMENSIONS) 
-            : DEFAULT_DIMENSIONS;
-        
-        String base = String.format("LeanVec%dx%d", primaryBits, residualBits);
-        if (dimensions > 0) {
-            return base + "_" + dimensions;
-        }
-        return base;
-    }
-}

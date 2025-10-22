@@ -54,20 +54,3 @@ public class FaissSVSLVQEncoder implements Encoder {
         return CompressionLevel.x8;
     }
 }
-    }
-
-    /**
-     * Generates the LVQ string for index description.
-     * Format: "LVQ{primary_bits}x{residual_bits}"
-     * Examples: "LVQ4x4", "LVQ4x8", "LVQ8x8"
-     */
-    public static String getLVQString(Map<String, Object> parameters) {
-        int primaryBits = parameters.containsKey(PRIMARY_BITS) 
-            ? (Integer) parameters.get(PRIMARY_BITS) 
-            : DEFAULT_PRIMARY_BITS;
-        int residualBits = parameters.containsKey(RESIDUAL_BITS) 
-            ? (Integer) parameters.get(RESIDUAL_BITS) 
-            : DEFAULT_RESIDUAL_BITS;
-        return String.format("LVQ%dx%d", primaryBits, residualBits);
-    }
-}
