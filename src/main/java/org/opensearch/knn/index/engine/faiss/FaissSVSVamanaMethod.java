@@ -8,14 +8,23 @@ package org.opensearch.knn.index.engine.faiss;
 import com.google.common.collect.ImmutableSet;
 import org.opensearch.knn.index.SpaceType;
 import org.opensearch.knn.index.VectorDataType;
+import org.opensearch.knn.index.engine.Encoder;
 import org.opensearch.knn.index.engine.MethodComponent;
 import org.opensearch.knn.index.engine.Parameter;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
+import static org.opensearch.knn.common.KNNConstants.ENCODER_FLAT;
+import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_ENCODER_FP16;
+import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_ENCODER_LEANVEC;
+import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_ENCODER_LVQ;
+import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_ENCODER_SQ8;
 import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_VAMANA_DESCRIPTION;
+import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_DEGREE;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_SEARCH_WINDOW_SIZE;
@@ -25,18 +34,46 @@ import static org.opensearch.knn.common.KNNConstants.METHOD_SVS_VAMANA;
  * SVS Vamana method implementation. Provides graph-based approximate search using
  * the Vamana graph construction algorithm.
  *
- * Phase 3A (Current): Basic FP32 Vamana index without compression
- * - Supported index description: "SVSVamana{degree}" (e.g., "SVSVamana64")
- * - Parameters: degree (graph degree), search_window_size, search_buffer_capacity
+ * Supports compression encoders:
+ * - FLAT (no compression): "SVSVamana64"
+ * - FP16 (2x compression): "SVSVamana64,FP16"
+ * - SQ8 (4x compression): "SVSVamana64,SQ8"
+ * - LVQ (8x compression): "SVSVamana64,LVQ4x4"
+ * - LeanVec (adaptive): "SVSVamana64,LeanVec4x4" or "SVSVamana64,LeanVec4x4_128"
  *
- * Phase 3B (Future): Compression support will be added
- * - Planned: "SVSVamana64,FP16", "SVSVamana64,LVQ4x4", etc.
+ * Parameters:
+ * - degree: Graph degree (default: 64, range: 1-256)
+ * - search_window_size: Query-time search window (default: 10)
+ * - search_buffer_capacity: Query-time buffer capacity (default: 10)
+ * - encoder: Optional compression encoder
  */
 public class FaissSVSVamanaMethod extends AbstractFaissMethod {
 
     private static final Set<VectorDataType> SUPPORTED_DATA_TYPES = ImmutableSet.of(VectorDataType.FLOAT);
 
     public final static List<SpaceType> SUPPORTED_SPACES = Arrays.asList(SpaceType.L2, SpaceType.INNER_PRODUCT);
+
+    /**
+     * Supported encoders for SVS Vamana.
+     * FLAT (no compression), FP16, SQ8, LVQ, and LeanVec.
+     */
+    public final static Map<String, Encoder> SUPPORTED_ENCODERS = Map.of(
+        ENCODER_FLAT,
+        new FaissFlatEncoder(),
+        FAISS_SVS_ENCODER_FP16,
+        new FaissSVSFP16Encoder(),
+        FAISS_SVS_ENCODER_SQ8,
+        new FaissSVSSQ8Encoder(),
+        FAISS_SVS_ENCODER_LVQ,
+        new FaissSVSLVQEncoder(),
+        FAISS_SVS_ENCODER_LEANVEC,
+        new FaissSVSLeanVecEncoder()
+    );
+
+    private static final MethodComponent.MethodComponentContext DEFAULT_ENCODER_CONTEXT = new MethodComponent.MethodComponentContext(
+        ENCODER_FLAT,
+        Map.of()
+    );
 
     final static MethodComponent METHOD_COMPONENT = initMethodComponent();
 
@@ -62,9 +99,16 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
                 METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY,
                 new Parameter.IntegerParameter(METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY, 10, (v, context) -> v > 0)
             )
-            // Note: Encoder parameter will be added in Phase 3B (FP16, LVQ, LeanVec support)
+            .addParameter(
+                METHOD_ENCODER_PARAMETER,
+                new Parameter.MethodComponentContextParameter(
+                    METHOD_ENCODER_PARAMETER,
+                    DEFAULT_ENCODER_CONTEXT,
+                    SUPPORTED_ENCODERS.values().stream().collect(Collectors.toMap(Encoder::getName, Encoder::getMethodComponent))
+                )
+            )
             .setKnnLibraryIndexingContextGenerator(((methodComponent, methodComponentContext, knnMethodConfigContext) -> {
-                // Build index description: "SVSVamana{degree}"
+                // Build index description: "SVSVamana{degree}" or "SVSVamana{degree},{encoder}"
                 MethodAsMapBuilder methodAsMapBuilder = MethodAsMapBuilder.builder(
                     FAISS_SVS_VAMANA_DESCRIPTION,
                     methodComponent,
@@ -72,8 +116,11 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
                     knnMethodConfigContext
                 );
 
-                // Add degree parameter to the index description
+                // Add degree parameter to the index description (e.g., "64")
                 methodAsMapBuilder.addParameter(METHOD_PARAMETER_DEGREE, "", "");
+                
+                // Add encoder parameter to the index description (e.g., ",FP16" or ",LVQ4x4")
+                methodAsMapBuilder.addParameter(METHOD_ENCODER_PARAMETER, ",", "");
 
                 return methodAsMapBuilder.build();
             }))

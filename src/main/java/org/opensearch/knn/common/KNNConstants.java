@@ -141,6 +141,7 @@ public class KNNConstants {
     public static final String FAISS_SQ_TYPE = "type";
     public static final String FAISS_SQ_ENCODER_FP16 = "fp16";
     public static final String FAISS_SVS_ENCODER_FP16 = "svs_fp16";
+    public static final String FAISS_SVS_ENCODER_SQ8 = "svs_sq8";
     public static final String FAISS_SVS_ENCODER_LVQ = "lvq";
     public static final String FAISS_SVS_ENCODER_LEANVEC = "leanvec";
     public static final List<String> FAISS_SQ_ENCODER_TYPES = List.of(FAISS_SQ_ENCODER_FP16);
