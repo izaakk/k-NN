@@ -2692,7 +2692,6 @@ public class FaissIT extends KNNRestTestCase {
             .endObject();
 
         String mapping = builder.toString();
-        logger.info("[SVSVamana DEBUG] Generated mapping: {}", mapping);
         createKnnIndex(indexName, mapping);
 
         // Index test vectors using bulk API
