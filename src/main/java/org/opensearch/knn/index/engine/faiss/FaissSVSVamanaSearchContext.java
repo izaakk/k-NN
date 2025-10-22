@@ -7,7 +7,7 @@ package org.opensearch.knn.index.engine.faiss;
 
 import org.opensearch.knn.index.engine.KNNLibrarySearchContext;
 import org.opensearch.knn.index.engine.Parameter;
-import org.opensearch.knn.index.query.QueryContext;
+import org.opensearch.knn.index.engine.model.QueryContext;
 
 import java.util.Map;
 
