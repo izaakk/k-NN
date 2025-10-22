@@ -68,6 +68,7 @@ import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
 import static org.opensearch.knn.common.KNNConstants.METHOD_HNSW;
 import static org.opensearch.knn.common.KNNConstants.METHOD_IVF;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_DEGREE;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_EF_CONSTRUCTION;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_M;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_NLIST;
@@ -2682,15 +2683,14 @@ public class FaissIT extends KNNRestTestCase {
             .field(NAME, "svs_vamana")
             .field(METHOD_PARAMETER_SPACE_TYPE, spaceType.getValue())
             .field(KNN_ENGINE, KNNEngine.FAISS.getName())
-            .startObject("parameters")
-            .field("degree", 64)
-            .endObject()
+            .field(METHOD_PARAMETER_DEGREE, 64)
             .endObject()
             .endObject()
             .endObject()
             .endObject();
 
         String mapping = builder.toString();
+        logger.info("[SVSVamana DEBUG] Generated mapping: {}", mapping);
         createKnnIndex(indexName, mapping);
 
         // Index test vectors using bulk API
