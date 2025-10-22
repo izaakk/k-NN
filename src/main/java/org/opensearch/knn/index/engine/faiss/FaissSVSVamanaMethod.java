@@ -121,16 +121,20 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
                 // Add degree parameter to the index description (e.g., "64")
                 methodAsMapBuilder.addParameter(METHOD_PARAMETER_DEGREE, "", "");
                 
-                // Add encoder parameter only if it's not Flat (SVS Vamana uses FP32 by default)
-                // For Flat encoder: "SVSVamana64"
+                // Always add encoder parameter to process it (converts MethodComponentContext to serializable Map)
+                // This is critical for JSON serialization to work correctly
+                methodAsMapBuilder.addParameter(METHOD_ENCODER_PARAMETER, ",", "");
+                
+                // Remove ",Flat" suffix from index description if encoder is Flat
+                // For Flat encoder: "SVSVamana64" (Flat is default, so we exclude it)
                 // For other encoders: "SVSVamana64,FP16", "SVSVamana64,SQ8", etc.
                 Map<String, Object> parameters = methodComponentContext.getParameters();
                 Object encoderParam = parameters.get(METHOD_ENCODER_PARAMETER);
                 if (encoderParam instanceof MethodComponentContext) {
                     MethodComponentContext encoderContext = (MethodComponentContext) encoderParam;
-                    String encoderName = encoderContext.getName();
-                    if (encoderName != null && !encoderName.equals(ENCODER_FLAT)) {
-                        methodAsMapBuilder.addParameter(METHOD_ENCODER_PARAMETER, ",", "");
+                    if (ENCODER_FLAT.equals(encoderContext.getName())) {
+                        // Remove the ",Flat" suffix that was added by addParameter
+                        methodAsMapBuilder.indexDescription = methodAsMapBuilder.indexDescription.replace(",Flat", "");
                     }
                 }
 
