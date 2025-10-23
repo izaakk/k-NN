@@ -125,7 +125,7 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
                 // This is critical for JSON serialization to work correctly
                 methodAsMapBuilder.addParameter(METHOD_ENCODER_PARAMETER, ",", "");
                 
-                // Remove ",Flat" suffix from index description if encoder is Flat
+                // Remove ",Flat" from index description if encoder is Flat
                 // For Flat encoder: "SVSVamana64" (Flat is default, so we exclude it)
                 // For other encoders: "SVSVamana64,FP16", "SVSVamana64,SQ8", etc.
                 Map<String, Object> parameters = methodComponentContext.getParameters();
@@ -133,8 +133,11 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
                 if (encoderParam instanceof MethodComponentContext) {
                     MethodComponentContext encoderContext = (MethodComponentContext) encoderParam;
                     if (ENCODER_FLAT.equals(encoderContext.getName())) {
-                        // Remove the ",Flat" suffix that was added by addParameter
-                        methodAsMapBuilder.indexDescription = methodAsMapBuilder.indexDescription.replace(",Flat", "");
+                        // Remove the ",Flat" that was added - need to remove both comma and "Flat"
+                        String currentDescription = methodAsMapBuilder.indexDescription;
+                        if (currentDescription.endsWith(",Flat")) {
+                            methodAsMapBuilder.indexDescription = currentDescription.substring(0, currentDescription.length() - 5);
+                        }
                     }
                 }
 
