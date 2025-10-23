@@ -2871,23 +2871,42 @@ public class FaissIT extends KNNRestTestCase {
         deleteKNNIndex(indexName);
     }
 
-    public void testSVSVamana_withLeanVecEncoder_thenSucceed() throws Exception {
-        String indexName = "test-svs-vamana-leanvec";
+    /**
+     * Test SVS Vamana index with LeanVec encoder using model-based approach.
+     * 
+     * LeanVec requires training to compute transformation matrices, so it uses
+     * the model-based pattern similar to HNSW-PQ and IVF indexes. The workflow is:
+     * 1. Create a training index with sample data
+     * 2. Train a model using the training data
+     * 3. Create indexes that reference the trained model
+     * 
+     * This leverages the existing trainModel() API which calls InternalTrainIndex()
+     * in the JNI layer, which in turn calls index->train() for any untrained index.
+     */
+    @SneakyThrows
+    public void testSVSVamana_withLeanVecEncoder_usingTrainedModel_thenSucceed() {
+        String indexName = "test-index-svs-leanvec";
         String fieldName = "test-field";
-        int dimension = 3;
+        String trainingIndexName = "training-index-svs-leanvec";
+        String trainingFieldName = "training-field";
+
+        String modelId = "test-model-svs-leanvec";
+        String modelDescription = "SVS Vamana with LeanVec encoder model";
+
+        int dimension = 128;
+        int trainingDataCount = 1100; // Sufficient training data for LeanVec
         SpaceType spaceType = SpaceType.L2;
 
-        // Create index with SVS Vamana method and LeanVec encoder
-        XContentBuilder builder = XContentFactory.jsonBuilder()
+        // Step 1: Create training index and ingest training data
+        createBasicKnnIndex(trainingIndexName, trainingFieldName, dimension);
+        bulkIngestRandomVectors(trainingIndexName, trainingFieldName, trainingDataCount, dimension);
+
+        // Step 2: Define SVS Vamana method with LeanVec encoder
+        XContentBuilder methodBuilder = XContentFactory.jsonBuilder()
             .startObject()
-            .startObject("properties")
-            .startObject(fieldName)
-            .field("type", "knn_vector")
-            .field("dimension", dimension)
-            .startObject(KNN_METHOD)
             .field(NAME, "svs_vamana")
+            .field(KNN_ENGINE, FAISS_NAME)
             .field(METHOD_PARAMETER_SPACE_TYPE, spaceType.getValue())
-            .field(KNN_ENGINE, KNNEngine.FAISS.getName())
             .startObject(PARAMETERS)
             .field(METHOD_PARAMETER_DEGREE, 64)
             .startObject(METHOD_ENCODER_PARAMETER)
@@ -2899,32 +2918,69 @@ public class FaissIT extends KNNRestTestCase {
             .endObject()
             .endObject()
             .endObject()
-            .endObject()
+            .endObject();
+        Map<String, Object> method = xContentBuilderToMap(methodBuilder);
+
+        // Step 3: Train the model
+        trainModel(modelId, trainingIndexName, trainingFieldName, dimension, method, modelDescription);
+        assertTrainingSucceeds(modelId, 360, 1000);
+
+        // Step 4: Create an index using the trained model
+        XContentBuilder builder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("properties")
+            .startObject(fieldName)
+            .field("type", "knn_vector")
+            .field(MODEL_ID, modelId)
             .endObject()
             .endObject()
             .endObject();
 
+        Map<String, Object> mappingMap = xContentBuilderToMap(builder);
         String mapping = builder.toString();
+
         createKnnIndex(indexName, mapping);
+        assertEquals(new TreeMap<>(mappingMap), new TreeMap<>(getIndexMappingAsMap(indexName)));
 
-        // Index test vectors using bulk API
-        bulkAddKnnDocs(indexName, fieldName, new float[][] { { 1.0f, 1.0f, 1.0f }, { 2.0f, 2.0f, 2.0f }, { 3.0f, 3.0f, 3.0f } }, 3);
+        // Step 5: Index test data
+        int numDocs = 100;
+        for (int i = 0; i < Math.min(testData.indexData.docs.length, numDocs); i++) {
+            addKnnDoc(
+                indexName,
+                Integer.toString(testData.indexData.docs[i]),
+                fieldName,
+                Floats.asList(testData.indexData.vectors[i]).toArray()
+            );
+        }
 
+        // Assert we have the right number of documents in the index
         refreshAllNonSystemIndices();
-        assertEquals(3, getDocCount(indexName));
+        assertEquals(Math.min(testData.indexData.docs.length, numDocs), getDocCount(indexName));
 
-        // Search with a query vector
-        float[] queryVector = new float[] { 1.0f, 1.0f, 1.0f };
-        int k = 2;
-        Response response = searchKNNIndex(indexName, new KNNQueryBuilder(fieldName, queryVector, k), k);
-        String responseBody = EntityUtils.toString(response.getEntity());
-        List<KNNResult> results = parseSearchResponse(responseBody, fieldName);
+        // Step 6: Test search functionality
+        int k = 10;
+        for (int i = 0; i < Math.min(testData.queries.length, 10); i++) {
+            Response response = searchKNNIndex(indexName, new KNNQueryBuilder(fieldName, testData.queries[i], k), k);
+            String responseBody = EntityUtils.toString(response.getEntity());
+            List<KNNResult> knnResults = parseSearchResponse(responseBody, fieldName);
+            assertEquals(k, knnResults.size());
 
-        // Verify search results - should return 2 nearest neighbors
-        assertEquals(2, results.size());
+            List<Float> actualScores = parseSearchResponseScore(responseBody, fieldName);
+            for (int j = 0; j < k; j++) {
+                float[] primitiveArray = knnResults.get(j).getVector();
+                assertEquals(
+                    KNNEngine.FAISS.score(KNNScoringUtil.l2Squared(testData.queries[i], primitiveArray), spaceType),
+                    actualScores.get(j),
+                    0.0001
+                );
+            }
+        }
 
         // Clean up
         deleteKNNIndex(indexName);
+        deleteKNNIndex(trainingIndexName);
+        deleteModel(modelId);
+        validateGraphEviction();
     }
 
 }
