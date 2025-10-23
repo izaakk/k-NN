@@ -53,14 +53,15 @@ public class FaissSVSLVQEncoder implements Encoder {
         .setKnnLibraryIndexingContextGenerator(
             ((methodComponent, methodComponentContext, knnMethodConfigContext) -> {
                 MethodAsMapBuilder builder = MethodAsMapBuilder.builder(
-                    FAISS_SVS_ENCODER_LVQ,
+                    "LVQ",  // Faiss expects "LVQ", not "lvq"
                     methodComponent,
                     methodComponentContext,
                     knnMethodConfigContext
                 );
                 // Add primary_bits and residual_bits parameters: "LVQ4x4"
+                // First adds "4x", second adds "4" → "LVQ4x4"
                 builder.addParameter(METHOD_PARAMETER_LVQ_PRIMARY_BITS, "", "x");
-                builder.addParameter(METHOD_PARAMETER_LVQ_RESIDUAL_BITS, "x", "");
+                builder.addParameter(METHOD_PARAMETER_LVQ_RESIDUAL_BITS, "", "");
                 return builder.build();
             })
         )

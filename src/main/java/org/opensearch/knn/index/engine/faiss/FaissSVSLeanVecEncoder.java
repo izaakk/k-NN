@@ -63,14 +63,15 @@ public class FaissSVSLeanVecEncoder implements Encoder {
         .setKnnLibraryIndexingContextGenerator(
             ((methodComponent, methodComponentContext, knnMethodConfigContext) -> {
                 MethodAsMapBuilder builder = MethodAsMapBuilder.builder(
-                    FAISS_SVS_ENCODER_LEANVEC,
+                    "LeanVec",  // Faiss expects "LeanVec", not "leanvec"
                     methodComponent,
                     methodComponentContext,
                     knnMethodConfigContext
                 );
                 // Add primary_bits and residual_bits parameters: "LeanVec4x4"
+                // First adds "4x", second adds "4" → "LeanVec4x4"
                 builder.addParameter(METHOD_PARAMETER_LEANVEC_PRIMARY_BITS, "", "x");
-                builder.addParameter(METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS, "x", "");
+                builder.addParameter(METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS, "", "");
                 
                 // If dimensions is specified (non-zero), append it: "LeanVec4x4_128"
                 Object dimensions = methodComponentContext.getParameters().get(METHOD_PARAMETER_LEANVEC_DIMENSIONS);

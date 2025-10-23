@@ -26,7 +26,7 @@ public class FaissSVSFP16Encoder implements Encoder {
         .addSupportedDataTypes(Set.of(VectorDataType.FLOAT))
         .setKnnLibraryIndexingContextGenerator(
             ((methodComponent, methodComponentContext, knnMethodConfigContext) -> MethodAsMapBuilder.builder(
-                FAISS_SVS_ENCODER_FP16,
+                "FP16",  // Faiss expects "FP16", not "svs_fp16"
                 methodComponent,
                 methodComponentContext,
                 knnMethodConfigContext
