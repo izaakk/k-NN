@@ -60,6 +60,7 @@ public class FaissSVSLeanVecEncoder implements Encoder {
             METHOD_PARAMETER_LEANVEC_DIMENSIONS,
             new Parameter.IntegerParameter(METHOD_PARAMETER_LEANVEC_DIMENSIONS, 0, (v, context) -> v >= 0)
         )
+        .setRequiresTraining(true)  // LeanVec requires training to compute transformation matrices
         .setKnnLibraryIndexingContextGenerator(
             ((methodComponent, methodComponentContext, knnMethodConfigContext) -> {
                 MethodAsMapBuilder builder = MethodAsMapBuilder.builder(
