@@ -50,6 +50,20 @@ public class FaissSVSLVQEncoder implements Encoder {
             METHOD_PARAMETER_LVQ_RESIDUAL_BITS,
             new Parameter.IntegerParameter(METHOD_PARAMETER_LVQ_RESIDUAL_BITS, 4, (v, context) -> v >= 0 && v <= 8)
         )
+        .setKnnLibraryIndexingContextGenerator(
+            ((methodComponent, methodComponentContext, knnMethodConfigContext) -> {
+                MethodAsMapBuilder builder = MethodAsMapBuilder.builder(
+                    FAISS_SVS_ENCODER_LVQ,
+                    methodComponent,
+                    methodComponentContext,
+                    knnMethodConfigContext
+                );
+                // Add primary_bits and residual_bits parameters: "LVQ4x4"
+                builder.addParameter(METHOD_PARAMETER_LVQ_PRIMARY_BITS, "", "x");
+                builder.addParameter(METHOD_PARAMETER_LVQ_RESIDUAL_BITS, "x", "");
+                return builder.build();
+            })
+        )
         .build();
 
     @Override
