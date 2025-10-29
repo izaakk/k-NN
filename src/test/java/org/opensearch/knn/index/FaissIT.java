@@ -2996,4 +2996,109 @@ public class FaissIT extends KNNRestTestCase {
         validateGraphEviction();
     }
 
+    /**
+     * Test SVS Vamana index with LeanVec encoder using direct creation (no model-based training).
+     * 
+     * Based on tutorial pattern discovery: Faiss tutorial shows LeanVec uses train() and add()
+     * with THE SAME data in a single operation, with no serialization between steps.
+     * 
+     * IMPORTANT: LeanVec does NOT automatically train during add(). The code flow is:
+     * 1. IndexSVSVamanaLeanVec constructor sets is_trained = false
+     * 2. When add() is called, it checks if impl exists
+     * 3. If impl is null, it calls init_impl()
+     * 4. init_impl() REQUIRES is_trained = true, otherwise throws:
+     *    "Cannot initialize SVS LeanVec index without training first"
+     * 
+     * This means OpenSearch's native layer must:
+     * - Detect that LeanVec requires training (via requiresTraining())
+     * - Collect all vectors during index building
+     * - Call train(vectors) to compute transformation matrices
+     * - Call add(vectors) with the SAME vectors to build the index
+     * 
+     * This test will verify whether OpenSearch correctly handles train-then-add pattern
+     * for encoders that require training in direct index creation mode.
+     * 
+     * Tutorial pattern from tutorial/cpp/11-SVS-Vamana-LeanVec.cpp:
+     *   index.train(nb, xb);  // Train with data xb
+     *   index.add(nb, xb);    // Add THE SAME data xb immediately
+     * 
+     * This is fundamentally different from IVF/HNSW-PQ where you:
+     *   1. Train with samples
+     *   2. Serialize the trained model  
+     *   3. Load and add different production data
+     */
+    @SneakyThrows
+    public void testSVSVamana_withLeanVecEncoder_directCreation_thenSucceed() {
+        String indexName = "test-index-svs-leanvec-direct";
+        String fieldName = "test-field";
+
+        int dimension = 128;
+        SpaceType spaceType = SpaceType.L2;
+
+        // Create index with SVS Vamana + LeanVec using direct method (no model)
+        XContentBuilder builder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("properties")
+            .startObject(fieldName)
+            .field("type", "knn_vector")
+            .field("dimension", dimension)
+            .startObject(KNN_METHOD)
+            .field(NAME, "svs_vamana")
+            .field(KNN_ENGINE, FAISS_NAME)
+            .field(METHOD_PARAMETER_SPACE_TYPE, spaceType.getValue())
+            .startObject(PARAMETERS)
+            .field(METHOD_PARAMETER_DEGREE, 64)
+            .startObject(METHOD_ENCODER_PARAMETER)
+            .field(NAME, "leanvec")
+            .startObject(PARAMETERS)
+            .field("primary_bits", 4)
+            .field("residual_bits", 4)
+            .field("dimensions", 16)  // Compressed dimension
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject();
+
+        Map<String, Object> mappingMap = xContentBuilderToMap(builder);
+        String mapping = builder.toString();
+
+        createKnnIndex(indexName, mapping);
+        assertEquals(new TreeMap<>(mappingMap), new TreeMap<>(getIndexMappingAsMap(indexName)));
+
+        // Index test data
+        // OpenSearch native layer must handle: collect vectors → train() → add()
+        int numDocs = 100;
+        for (int i = 0; i < Math.min(testData.indexData.docs.length, numDocs); i++) {
+            addKnnDoc(
+                indexName,
+                Integer.toString(testData.indexData.docs[i]),
+                fieldName,
+                Floats.asList(testData.indexData.vectors[i]).toArray()
+            );
+        }
+
+        // Verify documents indexed
+        refreshAllNonSystemIndices();
+        assertEquals(Math.min(testData.indexData.docs.length, numDocs), getDocCount(indexName));
+
+        // Perform search to verify LeanVec index works
+        int k = 10;
+        for (int i = 0; i < Math.min(testData.queries.length, 10); i++) {
+            Response response = searchKNNIndex(indexName, new KNNQueryBuilder(fieldName, testData.queries[i], k), k);
+            String responseBody = EntityUtils.toString(response.getEntity());
+            List<KNNResult> knnResults = parseSearchResponse(responseBody, fieldName);
+            assertEquals(k, knnResults.size());
+
+            // Verify results are valid
+            List<String> docIdsFromResponse = knnResults.stream().map(KNNResult::getDocId).collect(Collectors.toList());
+            assertEquals(k, docIdsFromResponse.size());
+        }
+
+        // Clean up
+        deleteKNNIndex(indexName);
+    }
+
 }
