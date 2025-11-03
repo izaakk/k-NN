@@ -226,7 +226,6 @@ if ("${WIN32}" STREQUAL "")
                 ${gtest_SOURCE_DIR}/include
                 ${gmock_SOURCE_DIR}/include)
 
-
         set_target_properties(jni_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/bin)
     endif ()
 endif()
