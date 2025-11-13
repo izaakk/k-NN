@@ -3058,4 +3058,72 @@ public class FaissIT extends KNNRestTestCase {
         deleteKNNIndex(indexName);
     }
 
+    @SneakyThrows
+    public void testSVSVamana_withLeanVecEncoder_workflowOnly_thenSucceed() {
+        String indexName = "test-index-svs-leanvec-workflow";
+        String fieldName = "test-field";
+        String trainingIndexName = "training-index-svs-leanvec-workflow";
+        String trainingFieldName = "training-field";
+
+        String modelId = "test-model-svs-leanvec-workflow";
+        String modelDescription = "SVS Vamana with LeanVec encoder model - workflow test";
+
+        int dimension = 128;
+        int trainingDataCount = 1100; // Sufficient training data for LeanVec
+        int numDocs = 100;
+
+        // Step 1: Create training index and ingest training data
+        createBasicKnnIndex(trainingIndexName, trainingFieldName, dimension);
+        bulkIngestRandomVectors(trainingIndexName, trainingFieldName, trainingDataCount, dimension);
+
+        // Step 2: Define SVS Vamana method with LeanVec encoder
+        XContentBuilder methodBuilder = XContentFactory.jsonBuilder()
+            .startObject()
+            .field(NAME, "svs_vamana")
+            .field(KNN_ENGINE, FAISS_NAME)
+            .field(METHOD_PARAMETER_SPACE_TYPE, "l2")
+            .startObject(PARAMETERS)
+            .field(METHOD_PARAMETER_DEGREE, 64)
+            .startObject(METHOD_ENCODER_PARAMETER)
+            .field(NAME, "leanvec")
+            .startObject(PARAMETERS)
+            .field("primary_bits", 4)
+            .field("residual_bits", 4)
+            .field("dimensions", 0)
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject();
+        Map<String, Object> method = xContentBuilderToMap(methodBuilder);
+
+        // Step 3: Train the model
+        trainModel(modelId, trainingIndexName, trainingFieldName, dimension, method, modelDescription);
+        assertTrainingSucceeds(modelId, 360, 1000);
+
+        // Step 4: Create an index using the trained model
+        XContentBuilder builder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("properties")
+            .startObject(fieldName)
+            .field("type", "knn_vector")
+            .field(MODEL_ID, modelId)
+            .endObject()
+            .endObject()
+            .endObject();
+
+        String mapping = builder.toString();
+        createKnnIndex(indexName, getKNNDefaultIndexSettings(), mapping);
+
+        // Step 5: Index test data using synthetic data (like IVF tests)
+        indexTestData(indexName, fieldName, dimension, numDocs);
+
+        // Step 6: Query test data - only verify workflow, not scores (like IVF tests)
+        queryTestData(indexName, fieldName, dimension, numDocs);
+        
+        // Clean up
+        deleteKNNIndex(indexName);
+        deleteModel(modelId);
+        validateGraphEviction();
+    }
+
 }
