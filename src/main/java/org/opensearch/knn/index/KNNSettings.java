@@ -140,6 +140,13 @@ public class KNNSettings {
     public static final Integer INDEX_KNN_DEFAULT_ALGO_PARAM_M = 16;
     public static final Integer INDEX_KNN_DEFAULT_ALGO_PARAM_EF_SEARCH = 100;
     public static final Integer INDEX_KNN_DEFAULT_ALGO_PARAM_EF_CONSTRUCTION = 100;
+    
+    // SVS Vamana construction defaults
+    public static final Integer INDEX_KNN_DEFAULT_ALGO_PARAM_CONSTRUCTION_WINDOW_SIZE = 128;
+    public static final Float INDEX_KNN_DEFAULT_ALGO_PARAM_ALPHA = 1.2f;
+    public static final Integer INDEX_KNN_DEFAULT_ALGO_PARAM_MAX_CANDIDATE_POOL_SIZE = 200;
+    public static final Boolean INDEX_KNN_DEFAULT_ALGO_PARAM_USE_FULL_SEARCH_HISTORY = true;
+    
     public static final Integer KNN_DEFAULT_ALGO_PARAM_INDEX_THREAD_QTY = 1;
     public static final Integer KNN_DEFAULT_CIRCUIT_BREAKER_UNSET_PERCENTAGE = 75;
     public static final Integer KNN_DEFAULT_MODEL_CACHE_SIZE_LIMIT_PERCENTAGE = 10; // By default, set aside 10% of the JVM for the limit

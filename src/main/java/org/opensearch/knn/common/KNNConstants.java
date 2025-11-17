@@ -39,6 +39,13 @@ public class KNNConstants {
     public static final String METHOD_PARAMETER_DEGREE = "degree";
     public static final String METHOD_PARAMETER_SEARCH_WINDOW_SIZE = "search_window_size";
     public static final String METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY = "search_buffer_capacity";
+    
+    // SVS Vamana construction-time parameters
+    public static final String METHOD_PARAMETER_CONSTRUCTION_WINDOW_SIZE = "construction_window_size";
+    public static final String METHOD_PARAMETER_ALPHA = "alpha";
+    public static final String METHOD_PARAMETER_MAX_CANDIDATE_POOL_SIZE = "max_candidate_pool_size";
+    public static final String METHOD_PARAMETER_USE_FULL_SEARCH_HISTORY = "use_full_search_history";
+    
     public static final String METHOD_IVF = "ivf";
     public static final String METHOD_PARAMETER_NLIST = "nlist";
     public static final String METHOD_PARAMETER_SPACE_TYPE = "space_type"; // used for mapping parameter

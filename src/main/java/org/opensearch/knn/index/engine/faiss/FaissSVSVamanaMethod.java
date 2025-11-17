@@ -6,6 +6,7 @@
 package org.opensearch.knn.index.engine.faiss;
 
 import com.google.common.collect.ImmutableSet;
+import org.opensearch.knn.index.KNNSettings;
 import org.opensearch.knn.index.SpaceType;
 import org.opensearch.knn.index.VectorDataType;
 import org.opensearch.knn.index.engine.Encoder;
@@ -27,9 +28,13 @@ import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_ENCODER_LVQ;
 import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_ENCODER_SQ8;
 import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_VAMANA_DESCRIPTION;
 import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_ALPHA;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_CONSTRUCTION_WINDOW_SIZE;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_DEGREE;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_MAX_CANDIDATE_POOL_SIZE;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_SEARCH_WINDOW_SIZE;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_USE_FULL_SEARCH_HISTORY;
 import static org.opensearch.knn.common.KNNConstants.METHOD_SVS_VAMANA;
 
 /**
@@ -92,6 +97,37 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
             .addParameter(
                 METHOD_PARAMETER_DEGREE,
                 new Parameter.IntegerParameter(METHOD_PARAMETER_DEGREE, 64, (v, context) -> v > 0 && v <= 256)
+            )
+            .addParameter(
+                METHOD_PARAMETER_CONSTRUCTION_WINDOW_SIZE,
+                new Parameter.IntegerParameter(
+                    METHOD_PARAMETER_CONSTRUCTION_WINDOW_SIZE,
+                    KNNSettings.INDEX_KNN_DEFAULT_ALGO_PARAM_CONSTRUCTION_WINDOW_SIZE,
+                    (v, context) -> v > 0
+                )
+            )
+            .addParameter(
+                METHOD_PARAMETER_ALPHA,
+                new Parameter.FloatParameter(
+                    METHOD_PARAMETER_ALPHA,
+                    KNNSettings.INDEX_KNN_DEFAULT_ALGO_PARAM_ALPHA,
+                    (v, context) -> v >= 0.5f && v <= 2.0f
+                )
+            )
+            .addParameter(
+                METHOD_PARAMETER_MAX_CANDIDATE_POOL_SIZE,
+                new Parameter.IntegerParameter(
+                    METHOD_PARAMETER_MAX_CANDIDATE_POOL_SIZE,
+                    KNNSettings.INDEX_KNN_DEFAULT_ALGO_PARAM_MAX_CANDIDATE_POOL_SIZE,
+                    (v, context) -> v > 0
+                )
+            )
+            .addParameter(
+                METHOD_PARAMETER_USE_FULL_SEARCH_HISTORY,
+                new Parameter.BooleanParameter(
+                    METHOD_PARAMETER_USE_FULL_SEARCH_HISTORY,
+                    KNNSettings.INDEX_KNN_DEFAULT_ALGO_PARAM_USE_FULL_SEARCH_HISTORY
+                )
             )
             .addParameter(
                 METHOD_PARAMETER_SEARCH_WINDOW_SIZE,
