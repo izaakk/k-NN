@@ -705,5 +705,11 @@ const std::string knn_jni::EF_CONSTRUCTION = "ef_construction";
 const std::string knn_jni::EF_CONSTRUCTION_NMSLIB = "efConstruction";
 const std::string knn_jni::EF_SEARCH = "ef_search";
 
+// SVS Vamana construction parameters
+const std::string knn_jni::CONSTRUCTION_WINDOW_SIZE = "construction_window_size";
+const std::string knn_jni::ALPHA = "alpha";
+const std::string knn_jni::MAX_CANDIDATE_POOL_SIZE = "max_candidate_pool_size";
+const std::string knn_jni::USE_FULL_SEARCH_HISTORY = "use_full_search_history";
+
 const std::string knn_jni::SPACE_TYPE_FAISS_INDEX_JAVA_KNN_CONSTANTS = "space_type";
 const std::string knn_jni::QUANTIZATION_LEVEL_FAISS_INDEX_LOAD_PARAMETER_JAVA_KNN_CONSTANTS = "quantization_level";
