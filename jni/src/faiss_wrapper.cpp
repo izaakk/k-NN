@@ -1161,31 +1161,12 @@ void SetExtraParameters(knn_jni::JNIUtilInterface * jniUtil, JNIEnv *env,
         }
     }
     
-    // SVS Vamana-specific parameters
+    // SVS Vamana-specific parameter: construction_window_size
     if (auto * indexSVS = dynamic_cast<faiss::IndexSVSVamana*>(index)) {
-        
-        // Set construction_window_size if provided
         if ((value = parametersCpp.find(knn_jni::CONSTRUCTION_WINDOW_SIZE)) != parametersCpp.end()) {
             indexSVS->construction_window_size = static_cast<size_t>(
                 jniUtil->ConvertJavaObjectToCppInteger(env, value->second)
             );
-        }
-        
-        // Set alpha if provided
-        if ((value = parametersCpp.find(knn_jni::ALPHA)) != parametersCpp.end()) {
-            indexSVS->alpha = jniUtil->ConvertJavaObjectToCppFloat(env, value->second);
-        }
-        
-        // Set max_candidate_pool_size if provided
-        if ((value = parametersCpp.find(knn_jni::MAX_CANDIDATE_POOL_SIZE)) != parametersCpp.end()) {
-            indexSVS->max_candidate_pool_size = static_cast<size_t>(
-                jniUtil->ConvertJavaObjectToCppInteger(env, value->second)
-            );
-        }
-        
-        // Set use_full_search_history if provided
-        if ((value = parametersCpp.find(knn_jni::USE_FULL_SEARCH_HISTORY)) != parametersCpp.end()) {
-            indexSVS->use_full_search_history = jniUtil->ConvertJavaObjectToCppBoolean(env, value->second);
         }
     }
 }
