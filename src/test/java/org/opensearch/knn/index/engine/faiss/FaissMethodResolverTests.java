@@ -24,7 +24,11 @@ import java.util.Map;
 import static org.opensearch.knn.common.KNNConstants.ENCODER_FLAT;
 import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
 import static org.opensearch.knn.common.KNNConstants.METHOD_HNSW;
+import static org.opensearch.knn.common.KNNConstants.METHOD_SVS_FLAT;
+import static org.opensearch.knn.common.KNNConstants.METHOD_SVS_VAMANA;
 import static org.opensearch.knn.common.KNNConstants.ENCODER_PARAMETER_PQ_M;
+import static org.opensearch.knn.common.KNNConstants.SVS_PARAMETER_DEGREE;
+import static org.opensearch.knn.common.KNNConstants.SVS_PARAMETER_COMPRESSION;
 
 public class FaissMethodResolverTests extends KNNTestCase {
 
@@ -164,6 +168,94 @@ public class FaissMethodResolverTests extends KNNTestCase {
         );
         assertEquals(knnMethodConfigContext.getCompressionLevel(), CompressionLevel.x8);
         validateResolveMethodContext(resolvedMethodContext, CompressionLevel.x8, SpaceType.L2, QFrameBitEncoder.NAME, true);
+    }
+
+    public void testResolveSVSFlatMethod() {
+        // Test basic SVS Flat method resolution
+        ResolvedMethodContext resolvedMethodContext = TEST_RESOLVER.resolveMethod(
+            new KNNMethodContext(
+                KNNEngine.FAISS,
+                SpaceType.L2,
+                new MethodComponentContext(METHOD_SVS_FLAT, Map.of())
+            ),
+            KNNMethodConfigContext.builder().vectorDataType(VectorDataType.FLOAT).versionCreated(Version.CURRENT).build(),
+            false,
+            SpaceType.L2
+        );
+        
+        assertEquals(CompressionLevel.x1, resolvedMethodContext.getCompressionLevel());
+        assertEquals(KNNEngine.FAISS, resolvedMethodContext.getKnnMethodContext().getKnnEngine());
+        assertEquals(SpaceType.L2, resolvedMethodContext.getKnnMethodContext().getSpaceType());
+        assertEquals(METHOD_SVS_FLAT, resolvedMethodContext.getKnnMethodContext().getMethodComponentContext().getName());
+
+        // Test SVS Flat with compression
+        resolvedMethodContext = TEST_RESOLVER.resolveMethod(
+            new KNNMethodContext(
+                KNNEngine.FAISS,
+                SpaceType.INNER_PRODUCT,
+                new MethodComponentContext(
+                    METHOD_SVS_FLAT,
+                    Map.of(SVS_PARAMETER_COMPRESSION, FaissSVSFlatMethod.COMPRESSION_LVQ4x4)
+                )
+            ),
+            KNNMethodConfigContext.builder().vectorDataType(VectorDataType.FLOAT).versionCreated(Version.CURRENT).build(),
+            false,
+            SpaceType.INNER_PRODUCT
+        );
+        
+        assertEquals(CompressionLevel.x1, resolvedMethodContext.getCompressionLevel());
+        assertEquals(KNNEngine.FAISS, resolvedMethodContext.getKnnMethodContext().getKnnEngine());
+        assertEquals(SpaceType.INNER_PRODUCT, resolvedMethodContext.getKnnMethodContext().getSpaceType());
+        assertEquals(METHOD_SVS_FLAT, resolvedMethodContext.getKnnMethodContext().getMethodComponentContext().getName());
+        
+        Map<String, Object> flatParams = resolvedMethodContext.getKnnMethodContext().getMethodComponentContext().getParameters();
+        assertEquals(FaissSVSFlatMethod.COMPRESSION_LVQ4x4, flatParams.get(SVS_PARAMETER_COMPRESSION));
+    }
+
+    public void testResolveSVSVamanaMethod() {
+        // Test basic SVS Vamana method resolution with defaults
+        ResolvedMethodContext resolvedMethodContext = TEST_RESOLVER.resolveMethod(
+            new KNNMethodContext(
+                KNNEngine.FAISS,
+                SpaceType.L2,
+                new MethodComponentContext(METHOD_SVS_VAMANA, Map.of())
+            ),
+            KNNMethodConfigContext.builder().vectorDataType(VectorDataType.FLOAT).versionCreated(Version.CURRENT).build(),
+            false,
+            SpaceType.L2
+        );
+        
+        assertEquals(CompressionLevel.x1, resolvedMethodContext.getCompressionLevel());
+        assertEquals(KNNEngine.FAISS, resolvedMethodContext.getKnnMethodContext().getKnnEngine());
+        assertEquals(SpaceType.L2, resolvedMethodContext.getKnnMethodContext().getSpaceType());
+        assertEquals(METHOD_SVS_VAMANA, resolvedMethodContext.getKnnMethodContext().getMethodComponentContext().getName());
+
+        // Test SVS Vamana with custom degree and compression
+        resolvedMethodContext = TEST_RESOLVER.resolveMethod(
+            new KNNMethodContext(
+                KNNEngine.FAISS,
+                SpaceType.COSINESIMIL,
+                new MethodComponentContext(
+                    METHOD_SVS_VAMANA,
+                    Map.of(
+                        SVS_PARAMETER_DEGREE, 96,
+                        SVS_PARAMETER_COMPRESSION, FaissSVSVamanaMethod.COMPRESSION_LEANVEC8x8
+                    )
+                )
+            ),
+            KNNMethodConfigContext.builder().vectorDataType(VectorDataType.FLOAT).versionCreated(Version.CURRENT).build(),
+            false,
+            SpaceType.COSINESIMIL
+        );
+        
+        assertEquals(CompressionLevel.x1, resolvedMethodContext.getCompressionLevel());
+        assertEquals(KNNEngine.FAISS, resolvedMethodContext.getKnnMethodContext().getKnnEngine());
+        assertEquals(SpaceType.COSINESIMIL, resolvedMethodContext.getKnnMethodContext().getSpaceType());
+        assertEquals(METHOD_SVS_VAMANA, resolvedMethodContext.getKnnMethodContext().getMethodComponentContext().getName());
+        
+        Map<String, Object> vamanaParams = resolvedMethodContext.getKnnMethodContext().getMethodComponentContext().getParameters();
+        assertEquals(96, vamanaParams.get(SVS_PARAMETER_DEGREE));
+        assertEquals(FaissSVSVamanaMethod.COMPRESSION_LEANVEC8x8, vamanaParams.get(SVS_PARAMETER_COMPRESSION));
     }
 
     private void validateResolveMethodContext(

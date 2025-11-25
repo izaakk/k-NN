@@ -537,19 +537,20 @@ jlong knn_jni::faiss_wrapper::LoadIndexWithStreamADC(faiss::IOReader* ioReader, 
     constexpr int DEFAULT_M = 32;
 
     faiss::IndexHNSW* alteredIndexHNSW = nullptr;
-    if (auto binaryCagra = dynamic_cast<faiss::IndexBinaryHNSWCagra*>(hnswBinary)) {
-        auto* alteredIndexCagraHNSW = new faiss::IndexHNSWCagra(alteredStorage->d, DEFAULT_M);
-        alteredIndexCagraHNSW->base_level_only = binaryCagra->base_level_only;
-        alteredIndexCagraHNSW->num_base_level_search_entrypoints = binaryCagra->num_base_level_search_entrypoints;
-        // IndexHNSWCagra creates storage in its constructor, so we must delete it before assigning a new one.
-        delete alteredIndexCagraHNSW->storage;
-        alteredIndexCagraHNSW->storage = alteredStorage;
+    // Note: IndexBinaryHNSWCagra not available in SVS-enabled faiss branch, skip this optimization
+    // if (auto binaryCagra = dynamic_cast<faiss::IndexBinaryHNSWCagra*>(hnswBinary)) {
+    //     auto* alteredIndexCagraHNSW = new faiss::IndexHNSWCagra(alteredStorage->d, DEFAULT_M);
+    //     alteredIndexCagraHNSW->base_level_only = binaryCagra->base_level_only;
+    //     alteredIndexCagraHNSW->num_base_level_search_entrypoints = binaryCagra->num_base_level_search_entrypoints;
+    //     // IndexHNSWCagra creates storage in its constructor, so we must delete it before assigning a new one.
+    //     delete alteredIndexCagraHNSW->storage;
+    //     alteredIndexCagraHNSW->storage = alteredStorage;
 
-        // Assign HNSWCagra
-        alteredIndexHNSW = alteredIndexCagraHNSW;
-    } else {
+    //     // Assign HNSWCagra
+    //     alteredIndexHNSW = alteredIndexCagraHNSW;
+    // } else {
         alteredIndexHNSW = new faiss::IndexHNSW(alteredStorage, DEFAULT_M);
-    }
+    // }
 
     alteredIndexHNSW->hnsw = std::move(hnswBinary->hnsw);
     auto* alteredIdMap = new faiss::IndexIDMap(alteredIndexHNSW);
