@@ -141,7 +141,6 @@ public class KNNSettings {
     public static final Integer INDEX_KNN_DEFAULT_ALGO_PARAM_EF_SEARCH = 100;
     public static final Integer INDEX_KNN_DEFAULT_ALGO_PARAM_EF_CONSTRUCTION = 100;
     
-    // SVS Vamana construction default (matches HNSW efConstruction for fair comparison)
     public static final Integer INDEX_KNN_DEFAULT_ALGO_PARAM_CONSTRUCTION_WINDOW_SIZE = 128;
     
     public static final Integer KNN_DEFAULT_ALGO_PARAM_INDEX_THREAD_QTY = 1;

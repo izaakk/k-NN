@@ -37,19 +37,6 @@ import static org.opensearch.knn.common.KNNConstants.METHOD_SVS_VAMANA;
 /**
  * SVS Vamana method implementation. Provides graph-based approximate search using
  * the Vamana graph construction algorithm.
- *
- * Supports compression encoders:
- * - FLAT (no compression): "SVSVamana64"
- * - FP16 (2x compression): "SVSVamana64,FP16"
- * - SQ8 (4x compression): "SVSVamana64,SQ8"
- * - LVQ (8x compression): "SVSVamana64,LVQ4x4"
- * - LeanVec (adaptive): "SVSVamana64,LeanVec4x4" or "SVSVamana64,LeanVec4x4_128"
- *
- * Parameters:
- * - degree: Graph degree (default: 64, range: 1-256)
- * - search_window_size: Query-time search window (default: 10)
- * - search_buffer_capacity: Query-time buffer capacity (default: 10)
- * - encoder: Optional compression encoder
  */
 public class FaissSVSVamanaMethod extends AbstractFaissMethod {
 
