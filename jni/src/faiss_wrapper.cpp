@@ -686,9 +686,10 @@ jobjectArray knn_jni::faiss_wrapper::QueryIndex_WithFilter(knn_jni::JNIUtilInter
             faiss::idx_t* batchIndices = reinterpret_cast<faiss::idx_t*>(filteredIdsArray);
             idSelector.reset(new faiss::IDSelectorBatch(filterIdsLength, batchIndices));
         }
-        faiss::SearchParameters *searchParameters;
+        faiss::SearchParameters *searchParameters = nullptr;
         faiss::SearchParametersHNSW hnswParams;
         faiss::SearchParametersIVF ivfParams;
+        faiss::SearchParametersSVSVamana svsVamanaParams;
         std::unique_ptr<faiss::IDGrouperBitmap> idGrouper;
         std::vector<uint64_t> idGrouperBitmap;
         auto hnswReader = dynamic_cast<const faiss::IndexHNSW*>(indexReader->index);
@@ -704,12 +705,23 @@ jobjectArray knn_jni::faiss_wrapper::QueryIndex_WithFilter(knn_jni::JNIUtilInter
         } else {
             auto ivfReader = dynamic_cast<const faiss::IndexIVF*>(indexReader->index);
             auto ivfFlatReader = dynamic_cast<const faiss::IndexIVFFlat*>(indexReader->index);
-            
+
             if(ivfReader || ivfFlatReader) {
                 int indexNprobe = ivfReader == nullptr ? ivfFlatReader->nprobe : ivfReader->nprobe;
                 ivfParams.nprobe = commons::getIntegerMethodParameter(env, jniUtil, methodParams, NPROBES, indexNprobe);
                 ivfParams.sel = idSelector.get();
                 searchParameters = &ivfParams;
+            } else {
+                // Check for SVS Vamana index (also handles LVQ and LeanVec variants which inherit from IndexSVSVamana)
+                auto svsVamanaReader = dynamic_cast<const faiss::IndexSVSVamana*>(indexReader->index);
+                if (svsVamanaReader) {
+                    svsVamanaParams.search_window_size = knn_jni::commons::getIntegerMethodParameter(
+                        env, jniUtil, methodParams, knn_jni::SEARCH_WINDOW_SIZE, svsVamanaReader->search_window_size);
+                    svsVamanaParams.search_buffer_capacity = knn_jni::commons::getIntegerMethodParameter(
+                        env, jniUtil, methodParams, knn_jni::SEARCH_BUFFER_CAPACITY, svsVamanaReader->search_buffer_capacity);
+                    svsVamanaParams.sel = idSelector.get();
+                    searchParameters = &svsVamanaParams;
+                }
             }
         }
         try {
@@ -724,6 +736,7 @@ jobjectArray knn_jni::faiss_wrapper::QueryIndex_WithFilter(knn_jni::JNIUtilInter
         faiss::SearchParameters *searchParameters = nullptr;
         faiss::SearchParametersHNSW hnswParams;
         faiss::SearchParametersIVF ivfParams;
+        faiss::SearchParametersSVSVamana svsVamanaParams;
         std::unique_ptr<faiss::IDGrouperBitmap> idGrouper;
         std::vector<uint64_t> idGrouperBitmap;
         auto hnswReader = dynamic_cast<const faiss::IndexHNSW*>(indexReader->index);
@@ -741,6 +754,16 @@ jobjectArray knn_jni::faiss_wrapper::QueryIndex_WithFilter(knn_jni::JNIUtilInter
                 int indexNprobe = ivfReader->nprobe;
                 ivfParams.nprobe = commons::getIntegerMethodParameter(env, jniUtil, methodParams, NPROBES, indexNprobe);
                 searchParameters = &ivfParams;
+            } else {
+                // Check for SVS Vamana index (also handles LVQ and LeanVec variants which inherit from IndexSVSVamana)
+                auto svsVamanaReader = dynamic_cast<const faiss::IndexSVSVamana*>(indexReader->index);
+                if (svsVamanaReader) {
+                    svsVamanaParams.search_window_size = knn_jni::commons::getIntegerMethodParameter(
+                        env, jniUtil, methodParams, knn_jni::SEARCH_WINDOW_SIZE, svsVamanaReader->search_window_size);
+                    svsVamanaParams.search_buffer_capacity = knn_jni::commons::getIntegerMethodParameter(
+                        env, jniUtil, methodParams, knn_jni::SEARCH_BUFFER_CAPACITY, svsVamanaReader->search_buffer_capacity);
+                    searchParameters = &svsVamanaParams;
+                }
             }
         }
         try {
