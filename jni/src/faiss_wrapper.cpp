@@ -719,6 +719,10 @@ jobjectArray knn_jni::faiss_wrapper::QueryIndex_WithFilter(knn_jni::JNIUtilInter
                         env, jniUtil, methodParams, knn_jni::SEARCH_WINDOW_SIZE, svsVamanaReader->search_window_size);
                     svsVamanaParams.search_buffer_capacity = knn_jni::commons::getIntegerMethodParameter(
                         env, jniUtil, methodParams, knn_jni::SEARCH_BUFFER_CAPACITY, svsVamanaReader->search_buffer_capacity);
+                    // SVS requires search_buffer_capacity >= search_window_size
+                    if (svsVamanaParams.search_buffer_capacity < svsVamanaParams.search_window_size) {
+                        svsVamanaParams.search_buffer_capacity = svsVamanaParams.search_window_size;
+                    }
                     svsVamanaParams.sel = idSelector.get();
                     searchParameters = &svsVamanaParams;
                 }
@@ -762,6 +766,10 @@ jobjectArray knn_jni::faiss_wrapper::QueryIndex_WithFilter(knn_jni::JNIUtilInter
                         env, jniUtil, methodParams, knn_jni::SEARCH_WINDOW_SIZE, svsVamanaReader->search_window_size);
                     svsVamanaParams.search_buffer_capacity = knn_jni::commons::getIntegerMethodParameter(
                         env, jniUtil, methodParams, knn_jni::SEARCH_BUFFER_CAPACITY, svsVamanaReader->search_buffer_capacity);
+                    // SVS requires search_buffer_capacity >= search_window_size
+                    if (svsVamanaParams.search_buffer_capacity < svsVamanaParams.search_window_size) {
+                        svsVamanaParams.search_buffer_capacity = svsVamanaParams.search_window_size;
+                    }
                     searchParameters = &svsVamanaParams;
                 }
             }
