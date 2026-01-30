@@ -22,6 +22,7 @@
 #include "faiss/IndexIDMap.h"
 #include "faiss/IndexIVFFlat.h"
 #include "faiss/IndexIVFPQ.h"
+#include "faiss/svs/IndexSVSVamana.h"
 
 using ::testing::NiceMock;
 
@@ -120,6 +121,57 @@ struct FaissMockIdMap : faiss::IndexIDMap {
         radiusCalled = 0.0;
         distancesCalled = nullptr;
         labelsCalled = nullptr;
+        resCalled = nullptr;
+        paramsCalled = nullptr;
+    }
+};
+
+struct MockSVSVamanaIndex : faiss::IndexSVSVamana {
+    explicit MockSVSVamanaIndex(idx_t d) : faiss::IndexSVSVamana(d, 32) {
+        search_window_size = 64;
+        search_buffer_capacity = 64;
+    }
+};
+
+struct MockSVSVamanaIdMap : faiss::IndexIDMap {
+    mutable idx_t nCalled{};
+    mutable const float *xCalled{};
+    mutable float radiusCalled{};
+    mutable faiss::RangeSearchResult *resCalled{};
+    mutable const faiss::SearchParametersSVSVamana *paramsCalled{};
+
+    explicit MockSVSVamanaIdMap(MockSVSVamanaIndex *index)
+        : faiss::IndexIDMapTemplate<faiss::Index>(index) {}
+
+    void search(
+        idx_t n,
+        const float *x,
+        idx_t k,
+        float *distances,
+        idx_t *labels,
+        const faiss::SearchParameters *params) const override {
+        nCalled = n;
+        xCalled = x;
+        paramsCalled = dynamic_cast<const faiss::SearchParametersSVSVamana *>(params);
+    }
+
+    void range_search(
+        idx_t n,
+        const float *x,
+        float radius,
+        faiss::RangeSearchResult *res,
+        const faiss::SearchParameters *params) const override {
+        nCalled = n;
+        xCalled = x;
+        radiusCalled = radius;
+        resCalled = res;
+        paramsCalled = dynamic_cast<const faiss::SearchParametersSVSVamana *>(params);
+    }
+
+    void resetMock() const {
+        nCalled = 0;
+        xCalled = nullptr;
+        radiusCalled = 0.0;
         resCalled = nullptr;
         paramsCalled = nullptr;
     }
@@ -680,5 +732,147 @@ namespace load_index_with_stream_adc_params_test {
             }
         )
     );
+}
+
+namespace range_search_svs_vamana_test {
+
+    class FaissWrapperSVSVamanaRangeSearchTestFixture : public testing::Test {
+    public:
+        FaissWrapperSVSVamanaRangeSearchTestFixture()
+            : svs_index_(3), svs_id_map_(&svs_index_) {}
+
+    protected:
+        MockSVSVamanaIndex svs_index_;
+        MockSVSVamanaIdMap svs_id_map_;
+    };
+
+    TEST_F(FaissWrapperSVSVamanaRangeSearchTestFixture, RangeSearch_SVSVamana) {
+        // Given - range search without filter (non-filtered path)
+        JNIEnv *jniEnv = nullptr;
+        NiceMock<test_util::MockJNIUtil> mockJNIUtil;
+
+        float query[] = {1.2, 2.3, 3.4};
+        float radius = 10.0f;
+        int maxResultWindow = 100;
+
+        int searchWindowSize = 128;
+        int searchBufferCapacity = 128;
+        std::unordered_map<std::string, jobject> methodParams;
+        methodParams[knn_jni::SEARCH_WINDOW_SIZE] = reinterpret_cast<jobject>(&searchWindowSize);
+        methodParams[knn_jni::SEARCH_BUFFER_CAPACITY] = reinterpret_cast<jobject>(&searchBufferCapacity);
+
+        // When - call with no filter IDs and no parent IDs
+        knn_jni::faiss_wrapper::RangeSearchWithFilter(
+            &mockJNIUtil, jniEnv,
+            reinterpret_cast<jlong>(&svs_id_map_),
+            reinterpret_cast<jfloatArray>(&query), radius,
+            reinterpret_cast<jobject>(&methodParams),
+            maxResultWindow,
+            nullptr,  // no filter IDs
+            0,        // filterIdType
+            nullptr); // no parent IDs
+
+        // Then - SVS params should be captured
+        ASSERT_NE(nullptr, svs_id_map_.paramsCalled);
+        EXPECT_EQ(128, svs_id_map_.paramsCalled->search_window_size);
+        EXPECT_EQ(128, svs_id_map_.paramsCalled->search_buffer_capacity);
+        EXPECT_EQ(nullptr, svs_id_map_.paramsCalled->sel);
+        EXPECT_EQ(nullptr, svs_id_map_.paramsCalled->grp);
+        svs_id_map_.resetMock();
+    }
+
+    TEST_F(FaissWrapperSVSVamanaRangeSearchTestFixture, RangeSearchWithFilter_SVSVamana_Bitmap) {
+        // Given - range search with bitmap IDSelector (filterIdType=0)
+        JNIEnv *jniEnv = nullptr;
+        NiceMock<test_util::MockJNIUtil> mockJNIUtil;
+
+        float query[] = {1.2, 2.3, 3.4};
+        float radius = 10.0f;
+        int maxResultWindow = 100;
+
+        int searchWindowSize = 200;
+        int searchBufferCapacity = 200;
+        std::unordered_map<std::string, jobject> methodParams;
+        methodParams[knn_jni::SEARCH_WINDOW_SIZE] = reinterpret_cast<jobject>(&searchWindowSize);
+        methodParams[knn_jni::SEARCH_BUFFER_CAPACITY] = reinterpret_cast<jobject>(&searchBufferCapacity);
+
+        std::vector<long> filter;
+        filter.push_back(1);
+        filter.push_back(2);
+        std::vector<long> *filterptr = &filter;
+
+        std::vector<int> parentId;
+        parentId.push_back(1);
+        parentId.push_back(2);
+        std::vector<int> *parentIdPtr = &parentId;
+
+        EXPECT_CALL(mockJNIUtil,
+                    GetJavaIntArrayLength(
+                        jniEnv, reinterpret_cast<jintArray>(parentIdPtr)))
+                .WillOnce(testing::Return(parentId.size()));
+        EXPECT_CALL(mockJNIUtil,
+                    GetIntArrayElements(
+                        jniEnv, reinterpret_cast<jintArray>(parentIdPtr), nullptr))
+                .WillOnce(testing::Return(new int[2]{1, 2}));
+
+        // When - bitmap filter (filterIdType=0)
+        knn_jni::faiss_wrapper::RangeSearchWithFilter(
+            &mockJNIUtil, jniEnv,
+            reinterpret_cast<jlong>(&svs_id_map_),
+            reinterpret_cast<jfloatArray>(&query), radius,
+            reinterpret_cast<jobject>(&methodParams),
+            maxResultWindow,
+            reinterpret_cast<jlongArray>(filterptr),
+            0,  // bitmap filter type
+            reinterpret_cast<jintArray>(parentIdPtr));
+
+        // Then - SVS params with filter and grouper
+        ASSERT_NE(nullptr, svs_id_map_.paramsCalled);
+        EXPECT_EQ(200, svs_id_map_.paramsCalled->search_window_size);
+        EXPECT_EQ(200, svs_id_map_.paramsCalled->search_buffer_capacity);
+        EXPECT_NE(nullptr, svs_id_map_.paramsCalled->sel);
+        EXPECT_NE(nullptr, svs_id_map_.paramsCalled->grp);
+        svs_id_map_.resetMock();
+    }
+
+    TEST_F(FaissWrapperSVSVamanaRangeSearchTestFixture, RangeSearchWithFilter_SVSVamana_Batch) {
+        // Given - range search with batch IDSelector (filterIdType=1)
+        JNIEnv *jniEnv = nullptr;
+        NiceMock<test_util::MockJNIUtil> mockJNIUtil;
+
+        float query[] = {1.2, 2.3, 3.4};
+        float radius = 10.0f;
+        int maxResultWindow = 100;
+
+        int searchWindowSize = 150;
+        int searchBufferCapacity = 150;
+        std::unordered_map<std::string, jobject> methodParams;
+        methodParams[knn_jni::SEARCH_WINDOW_SIZE] = reinterpret_cast<jobject>(&searchWindowSize);
+        methodParams[knn_jni::SEARCH_BUFFER_CAPACITY] = reinterpret_cast<jobject>(&searchBufferCapacity);
+
+        std::vector<long> filter;
+        filter.push_back(1);
+        filter.push_back(2);
+        std::vector<long> *filterptr = &filter;
+
+        // When - batch filter (filterIdType=1), no parent IDs
+        knn_jni::faiss_wrapper::RangeSearchWithFilter(
+            &mockJNIUtil, jniEnv,
+            reinterpret_cast<jlong>(&svs_id_map_),
+            reinterpret_cast<jfloatArray>(&query), radius,
+            reinterpret_cast<jobject>(&methodParams),
+            maxResultWindow,
+            reinterpret_cast<jlongArray>(filterptr),
+            1,       // batch filter type
+            nullptr); // no parent IDs
+
+        // Then - SVS params with filter, no grouper
+        ASSERT_NE(nullptr, svs_id_map_.paramsCalled);
+        EXPECT_EQ(150, svs_id_map_.paramsCalled->search_window_size);
+        EXPECT_EQ(150, svs_id_map_.paramsCalled->search_buffer_capacity);
+        EXPECT_NE(nullptr, svs_id_map_.paramsCalled->sel);
+        EXPECT_EQ(nullptr, svs_id_map_.paramsCalled->grp);
+        svs_id_map_.resetMock();
+    }
 }
 

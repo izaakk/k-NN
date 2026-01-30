@@ -1302,9 +1302,10 @@ jobjectArray knn_jni::faiss_wrapper::RangeSearchWithFilter(knn_jni::JNIUtilInter
             faiss::idx_t* batchIndices = reinterpret_cast<faiss::idx_t*>(filteredIdsArray);
             idSelector.reset(new faiss::IDSelectorBatch(filterIdsLength, batchIndices));
         }
-        faiss::SearchParameters *searchParameters;
+        faiss::SearchParameters *searchParameters = nullptr;
         faiss::SearchParametersHNSW hnswParams;
         faiss::SearchParametersIVF ivfParams;
+        faiss::SearchParametersSVSVamana svsVamanaParams;
         std::unique_ptr<faiss::IDGrouperBitmap> idGrouper;
         std::vector<uint64_t> idGrouperBitmap;
         auto hnswReader = dynamic_cast<const faiss::IndexHNSW*>(indexReader->index);
@@ -1323,6 +1324,23 @@ jobjectArray knn_jni::faiss_wrapper::RangeSearchWithFilter(knn_jni::JNIUtilInter
             if(ivfReader || ivfFlatReader) {
                 ivfParams.sel = idSelector.get();
                 searchParameters = &ivfParams;
+            } else {
+                auto svsVamanaReader = dynamic_cast<const faiss::IndexSVSVamana*>(indexReader->index);
+                if (svsVamanaReader) {
+                    svsVamanaParams.search_window_size = knn_jni::commons::getIntegerMethodParameter(
+                        env, jniUtil, methodParams, knn_jni::SEARCH_WINDOW_SIZE, svsVamanaReader->search_window_size);
+                    svsVamanaParams.search_buffer_capacity = knn_jni::commons::getIntegerMethodParameter(
+                        env, jniUtil, methodParams, knn_jni::SEARCH_BUFFER_CAPACITY, svsVamanaReader->search_buffer_capacity);
+                    if (svsVamanaParams.search_buffer_capacity < svsVamanaParams.search_window_size) {
+                        svsVamanaParams.search_buffer_capacity = svsVamanaParams.search_window_size;
+                    }
+                    svsVamanaParams.sel = idSelector.get();
+                    if (parentIdsJ != nullptr) {
+                        idGrouper = buildIDGrouperBitmap(jniUtil, env, parentIdsJ, &idGrouperBitmap);
+                        svsVamanaParams.grp = idGrouper.get();
+                    }
+                    searchParameters = &svsVamanaParams;
+                }
             }
         }
         try {
@@ -1336,6 +1354,7 @@ jobjectArray knn_jni::faiss_wrapper::RangeSearchWithFilter(knn_jni::JNIUtilInter
     } else {
         faiss::SearchParameters *searchParameters = nullptr;
         faiss::SearchParametersHNSW hnswParams;
+        faiss::SearchParametersSVSVamana svsVamanaParams;
         std::unique_ptr<faiss::IDGrouperBitmap> idGrouper;
         std::vector<uint64_t> idGrouperBitmap;
         auto hnswReader = dynamic_cast<const faiss::IndexHNSW*>(indexReader->index);
@@ -1347,6 +1366,22 @@ jobjectArray knn_jni::faiss_wrapper::RangeSearchWithFilter(knn_jni::JNIUtilInter
                 hnswParams.grp = idGrouper.get();
             }
             searchParameters = &hnswParams;
+        } else {
+            auto svsVamanaReader = dynamic_cast<const faiss::IndexSVSVamana*>(indexReader->index);
+            if (svsVamanaReader) {
+                svsVamanaParams.search_window_size = knn_jni::commons::getIntegerMethodParameter(
+                    env, jniUtil, methodParams, knn_jni::SEARCH_WINDOW_SIZE, svsVamanaReader->search_window_size);
+                svsVamanaParams.search_buffer_capacity = knn_jni::commons::getIntegerMethodParameter(
+                    env, jniUtil, methodParams, knn_jni::SEARCH_BUFFER_CAPACITY, svsVamanaReader->search_buffer_capacity);
+                if (svsVamanaParams.search_buffer_capacity < svsVamanaParams.search_window_size) {
+                    svsVamanaParams.search_buffer_capacity = svsVamanaParams.search_window_size;
+                }
+                if (parentIdsJ != nullptr) {
+                    idGrouper = buildIDGrouperBitmap(jniUtil, env, parentIdsJ, &idGrouperBitmap);
+                    svsVamanaParams.grp = idGrouper.get();
+                }
+                searchParameters = &svsVamanaParams;
+            }
         }
         try {
             indexReader->range_search(1, rawQueryVector, radiusJ, &res, searchParameters);
