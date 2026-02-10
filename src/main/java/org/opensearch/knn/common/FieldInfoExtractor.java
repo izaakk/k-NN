@@ -27,6 +27,7 @@ import org.opensearch.knn.indices.ModelDao;
 
 import java.util.Locale;
 
+import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_ENABLED;
 import static org.opensearch.knn.common.KNNConstants.SPACE_TYPE;
 
 /**
@@ -116,6 +117,16 @@ public class FieldInfoExtractor {
             throw new IllegalArgumentException(String.format(Locale.ROOT, "Unable to find the model metadata for model id %s", modelId));
         }
         return modelMetadata.getSpaceType();
+    }
+
+    /**
+     * Checks whether deferred LeanVec training is enabled for a field.
+     *
+     * @param fieldInfo the field info
+     * @return true if deferred training is enabled
+     */
+    public static boolean isDeferredLeanVecEnabled(final FieldInfo fieldInfo) {
+        return "true".equals(fieldInfo.attributes().get(DEFERRED_TRAINING_ENABLED));
     }
 
     /**

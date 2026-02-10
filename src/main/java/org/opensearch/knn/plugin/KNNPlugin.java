@@ -27,6 +27,7 @@ import org.opensearch.env.Environment;
 import org.opensearch.env.NodeEnvironment;
 import org.opensearch.index.IndexModule;
 import org.opensearch.index.IndexSettings;
+import org.opensearch.index.shard.IndexEventListener;
 import org.opensearch.index.codec.CodecServiceFactory;
 import org.opensearch.index.engine.EngineFactory;
 import org.opensearch.index.mapper.Mapper;
@@ -38,6 +39,7 @@ import org.opensearch.knn.index.KNNSettings;
 import org.opensearch.knn.index.codec.KNNCodecService;
 import org.opensearch.knn.index.codec.derivedsource.DerivedSourceIndexOperationListener;
 import org.opensearch.knn.index.codec.nativeindex.NativeIndexBuildStrategyFactory;
+import org.opensearch.knn.index.codec.nativeindex.ShardModelCache;
 import org.opensearch.knn.index.mapper.KNNVectorFieldMapper;
 import org.opensearch.knn.index.memory.NativeMemoryCacheManager;
 import org.opensearch.knn.index.memory.NativeMemoryLoadStrategy;
@@ -367,6 +369,18 @@ public class KNNPlugin extends Plugin
         if (KNNSettings.isKNNDerivedSourceEnabled(indexModule.getSettings())) {
             indexModule.addIndexOperationListener(new DerivedSourceIndexOperationListener());
         }
+
+        // Clean up ShardModelCache when shards close (C3: prevent memory leak from stale caches)
+        indexModule.addIndexEventListener(new IndexEventListener() {
+            @Override
+            public void afterIndexShardClosed(
+                org.opensearch.core.index.shard.ShardId shardId,
+                org.opensearch.index.shard.IndexShard indexShard,
+                Settings settings
+            ) {
+                ShardModelCache.removeInstance(shardId.toString());
+            }
+        });
     }
 
     @Override

@@ -23,34 +23,67 @@ import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.util.IOUtils;
 import org.apache.lucene.util.RamUsageEstimator;
 import org.opensearch.common.StopWatch;
+import org.opensearch.knn.index.KNNSettings;
 import org.opensearch.knn.index.VectorDataType;
 import org.opensearch.knn.index.codec.nativeindex.NativeIndexBuildStrategyFactory;
 import org.opensearch.knn.index.codec.nativeindex.NativeIndexWriter;
+import org.opensearch.knn.index.codec.nativeindex.ShardModelCache;
+import org.opensearch.knn.index.codec.transfer.OffHeapFloatVectorTransfer;
+import org.opensearch.knn.index.engine.KNNEngine;
 import org.opensearch.knn.index.quantizationservice.QuantizationService;
 import org.opensearch.knn.index.vectorvalues.KNNVectorValues;
+import org.opensearch.knn.jni.JNIService;
+import org.opensearch.knn.plugin.stats.KNNCounter;
 import org.opensearch.knn.plugin.stats.KNNGraphValue;
 import org.opensearch.knn.quantization.models.quantizationParams.QuantizationParams;
 import org.opensearch.knn.quantization.models.quantizationState.QuantizationState;
 
 import java.io.IOException;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
 import static org.opensearch.knn.common.FieldInfoExtractor.extractVectorDataType;
+import static org.opensearch.knn.common.FieldInfoExtractor.isDeferredLeanVecEnabled;
+import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_DEFAULT_THRESHOLD;
+import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_LEANVEC_DIMS;
+import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_THRESHOLD;
+import static org.opensearch.knn.common.KNNConstants.DIMENSION;
+import static org.opensearch.knn.common.KNNConstants.INDEX_DESCRIPTION_PARAMETER;
+import static org.opensearch.knn.common.KNNConstants.INDEX_THREAD_QTY;
+import static org.opensearch.knn.common.KNNConstants.PARAMETERS;
+import static org.opensearch.knn.common.KNNConstants.SPACE_TYPE;
+import static org.opensearch.knn.common.KNNConstants.VECTOR_DATA_TYPE_FIELD;
 import static org.opensearch.knn.index.vectorvalues.KNNVectorValuesFactory.getKNNVectorValuesSupplierForMerge;
 import static org.opensearch.knn.index.vectorvalues.KNNVectorValuesFactory.getVectorValuesSupplier;
 
 /**
- * A KNNVectorsWriter class for writing the vector data strcutures and flat vectors for Native Engines.
+ * A KNNVectorsWriter class for writing the vector data structures and flat vectors for Native Engines.
  */
 @Log4j2
 public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
     private static final long SHALLOW_SIZE = RamUsageEstimator.shallowSizeOfInstance(NativeEngines990KnnVectorsWriter.class);
 
+    /**
+     * Maximum number of vectors to use for training. If more are available, we sample uniformly.
+     * 1M vectors at 768D float32 ≈ 2.9 GB off-heap — keeps memory bounded (C4 fix).
+     */
+    private static final int MAX_TRAINING_VECTORS = 1_000_000;
+
+    /**
+     * Minimum allowed training threshold to prevent accidental training on tiny segments.
+     */
+    private static final int MIN_TRAINING_THRESHOLD = 1000;
+
     private final SegmentWriteState segmentWriteState;
     private final FlatVectorsWriter flatVectorsWriter;
     private KNN990QuantizationStateWriter quantizationStateWriter;
+    private LeanVecModelWriter leanVecModelWriter;
     private final List<NativeEngineFieldVectorsWriter<?>> fields = new ArrayList<>();
     private boolean finished;
     private final Integer approximateThreshold;
@@ -117,11 +150,24 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
                 );
                 continue;
             }
+
+            // Load model from shard cache for flush (post-training segments use LeanVec)
+            byte[] shardModelBlob = null;
+            if (isDeferredLeanVecEnabled(fieldInfo)) {
+                String shardId = getShardId();
+                ShardModelCache cache = ShardModelCache.getInstance(shardId);
+                shardModelBlob = cache.getModel(fieldInfo.name);
+                if (shardModelBlob != null) {
+                    log.debug("[Flush] Using cached LeanVec model for field {}", fieldInfo.name);
+                }
+            }
+
             final NativeIndexWriter writer = NativeIndexWriter.getWriter(
                 fieldInfo,
                 segmentWriteState,
                 quantizationState,
-                nativeIndexBuildStrategyFactory
+                nativeIndexBuildStrategyFactory,
+                shardModelBlob
             );
 
             StopWatch stopWatch = new StopWatch().start();
@@ -160,16 +206,29 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
             );
             return;
         }
+
+        // Deferred LeanVec training: check if we should train or reuse existing model
+        byte[] shardModelBlob = null;
+        if (isDeferredLeanVecEnabled(fieldInfo)) {
+            shardModelBlob = maybeTriggerLeanVecTraining(fieldInfo, knnVectorValuesSupplier, totalLiveDocs);
+        }
+
         final NativeIndexWriter writer = NativeIndexWriter.getWriter(
             fieldInfo,
             segmentWriteState,
             quantizationState,
-            nativeIndexBuildStrategyFactory
+            nativeIndexBuildStrategyFactory,
+            shardModelBlob
         );
 
         StopWatch stopWatch = new StopWatch().start();
 
         writer.mergeIndex(knnVectorValuesSupplier, totalLiveDocs);
+
+        // If we trained or propagated a model, write it to the output segment file
+        if (shardModelBlob != null) {
+            writeLeanVecModelToSegment(fieldInfo.getFieldNumber(), shardModelBlob);
+        }
 
         long time_in_millis = stopWatch.stop().totalTime().millis();
         KNNGraphValue.MERGE_TOTAL_TIME_IN_MILLIS.incrementBy(time_in_millis);
@@ -188,26 +247,19 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
         if (quantizationStateWriter != null) {
             quantizationStateWriter.writeFooter();
         }
+        if (leanVecModelWriter != null) {
+            leanVecModelWriter.writeFooter();
+        }
         flatVectorsWriter.finish();
     }
 
-    /**
-     * Closes this stream and releases any system resources associated
-     * with it. If the stream is already closed then invoking this
-     * method has no effect.
-     *
-     * <p> As noted in {@link AutoCloseable#close()}, cases where the
-     * close may fail require careful attention. It is strongly advised
-     * to relinquish the underlying resources and to internally
-     * <em>mark</em> the {@code Closeable} as closed, prior to throwing
-     * the {@code IOException}.
-     *
-     * @throws IOException if an I/O error occurs
-     */
     @Override
     public void close() throws IOException {
         if (quantizationStateWriter != null) {
             quantizationStateWriter.closeOutput();
+        }
+        if (leanVecModelWriter != null) {
+            leanVecModelWriter.closeOutput();
         }
         IOUtils.close(flatVectorsWriter);
     }
@@ -242,12 +294,12 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
 
     /**
      * The {@link KNNVectorValues} will be exhausted after this function run. So make sure that you are not sending the
-     * vectorsValues object which you plan to use later
+     * vectorsValues object which you plan to use later.
+     *
+     * Note: The knnVectorValuesSupplier passed to training and index building must produce independent iterators
+     * that can be consumed separately (each call to .get() returns a fresh iterator).
      */
     private int getLiveDocs(KNNVectorValues<?> vectorValues) throws IOException {
-        // Count all the live docs as there vectorValues.totalLiveDocs() just gives the cost for the FloatVectorValues,
-        // and doesn't tell the correct number of docs, if there are deleted docs in the segment. So we are counting
-        // the total live docs here.
         int liveDocs = 0;
         while (vectorValues.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
             liveDocs++;
@@ -262,10 +314,289 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
         }
     }
 
+    private void initLeanVecModelWriterIfNecessary() throws IOException {
+        if (leanVecModelWriter == null) {
+            leanVecModelWriter = new LeanVecModelWriter(segmentWriteState);
+            leanVecModelWriter.writeHeader(segmentWriteState);
+        }
+    }
+
     private boolean shouldSkipBuildingVectorDataStructure(final long docCount) {
         if (approximateThreshold < 0) {
             return true;
         }
         return docCount < approximateThreshold;
+    }
+
+    // ---- Deferred LeanVec training helpers ----
+
+    /**
+     * Gets the training threshold for deferred LeanVec training (W6: NumberFormatException safety, S9: min threshold).
+     */
+    private static int getTrainingThreshold(FieldInfo fieldInfo) {
+        String val = fieldInfo.attributes().get(DEFERRED_TRAINING_THRESHOLD);
+        if (val == null) {
+            return DEFERRED_TRAINING_DEFAULT_THRESHOLD;
+        }
+        try {
+            int threshold = Integer.parseInt(val);
+            if (threshold < MIN_TRAINING_THRESHOLD) {
+                log.warn("Training threshold {} below minimum {}, using minimum", threshold, MIN_TRAINING_THRESHOLD);
+                return MIN_TRAINING_THRESHOLD;
+            }
+            return threshold;
+        } catch (NumberFormatException e) {
+            log.warn("Invalid training threshold '{}', using default {}", val, DEFERRED_TRAINING_DEFAULT_THRESHOLD);
+            return DEFERRED_TRAINING_DEFAULT_THRESHOLD;
+        }
+    }
+
+    /**
+     * Gets the target LeanVec dimensions (W6: NumberFormatException safety).
+     */
+    private static int getLeanVecDimensions(FieldInfo fieldInfo) {
+        String val = fieldInfo.attributes().get(DEFERRED_TRAINING_LEANVEC_DIMS);
+        if (val == null) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(val);
+        } catch (NumberFormatException e) {
+            log.warn("Invalid LeanVec dimensions '{}', returning 0", val);
+            return 0;
+        }
+    }
+
+    /**
+     * Gets the vector dimension from field attributes (W6: NumberFormatException safety).
+     */
+    private static int getDimension(FieldInfo fieldInfo) {
+        String val = fieldInfo.attributes().get(DIMENSION);
+        if (val == null) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(val);
+        } catch (NumberFormatException e) {
+            log.warn("Invalid dimension '{}', returning 0", val);
+            return 0;
+        }
+    }
+
+    /**
+     * Checks if training should trigger and does so if appropriate.
+     * Returns the shard model blob (from cache, input segments, or freshly trained), or null if no model available.
+     *
+     * Uses ShardModelCache for per-field locks (C3 fix) and circuit breaker (C6 fix).
+     */
+    private byte[] maybeTriggerLeanVecTraining(
+        FieldInfo fieldInfo,
+        Supplier<KNNVectorValues<?>> knnVectorValuesSupplier,
+        int totalLiveDocs
+    ) throws IOException {
+        String shardId = getShardId();
+        ShardModelCache cache = ShardModelCache.getInstance(shardId);
+
+        // 1. Check in-memory cache first
+        byte[] cachedModel = cache.getModel(fieldInfo.name);
+        if (cachedModel != null) {
+            log.debug("[Merge] Using cached LeanVec model for field {} ({} vectors)", fieldInfo.name, totalLiveDocs);
+            return cachedModel;
+        }
+
+        // 2. Check if below training threshold
+        int threshold = getTrainingThreshold(fieldInfo);
+        if (totalLiveDocs < threshold) {
+            log.debug(
+                "[Merge] Below training threshold for field {}: {} < {} — using LVQ fallback",
+                fieldInfo.name,
+                totalLiveDocs,
+                threshold
+            );
+            return null;
+        }
+
+        // 3. Check circuit breaker (C6)
+        if (cache.isTrainingSuppressed(fieldInfo.name)) {
+            log.warn("[Merge] Training suppressed by circuit breaker for field {} — using LVQ fallback", fieldInfo.name);
+            return null;
+        }
+
+        // 4. Acquire per-field lock to prevent concurrent training (C3: locks in cache, not static)
+        ReentrantLock lock = cache.getTrainingLock(fieldInfo.name);
+        lock.lock();
+        try {
+            // Double-check: model may have been created while waiting for the lock
+            cachedModel = cache.getModel(fieldInfo.name);
+            if (cachedModel != null) {
+                log.debug("[Merge] Model appeared in cache while waiting for lock for field {}", fieldInfo.name);
+                return cachedModel;
+            }
+
+            // Train the model
+            KNNCounter.DEFERRED_TRAINING_REQUESTS.increment();
+            log.info(
+                "[Merge] Training LeanVec model for field {} ({} vectors, threshold={})",
+                fieldInfo.name,
+                totalLiveDocs,
+                threshold
+            );
+            byte[] modelBlob = trainLeanVecModel(fieldInfo, knnVectorValuesSupplier, totalLiveDocs);
+            if (modelBlob != null) {
+                cache.putModel(fieldInfo.name, modelBlob);
+                KNNCounter.DEFERRED_TRAINING_SUCCESS.increment();
+            } else {
+                cache.recordFailure(fieldInfo.name);
+                KNNCounter.DEFERRED_TRAINING_ERRORS.increment();
+            }
+            return modelBlob;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Note: After node restart, the ShardModelCache is empty. The model will be re-trained
+    // during the first merge that crosses the training threshold. The .knnlvm segment files
+    // provide durable storage for future use (e.g., recovery from segment files), but the
+    // current v1 implementation relies on the in-memory cache as the primary lookup mechanism.
+    // Future enhancement: load models from segment files into cache during shard recovery.
+
+    /**
+     * Writes a LeanVec model blob to the output segment file.
+     */
+    private void writeLeanVecModelToSegment(int fieldNumber, byte[] modelBlob) throws IOException {
+        initLeanVecModelWriterIfNecessary();
+        leanVecModelWriter.writeModel(fieldNumber, modelBlob);
+    }
+
+    /**
+     * Trains a LeanVec model using the vectors from the merge.
+     *
+     * Steps:
+     * 1. Read vectors from KNNVectorValues into off-heap memory (capped at MAX_TRAINING_VECTORS)
+     * 2. Build training parameters (index_description with LeanVec encoding)
+     * 3. Call JNIService.trainIndex() to produce a model blob
+     * 4. Return the model blob for immediate use
+     *
+     * Note: JNICommons.storeVectorData() allocates a std::vector<float>* and returns its address as jlong.
+     * JNIService.trainIndex() casts this back to std::vector<float>* — the types match (C1 clarification).
+     */
+    private byte[] trainLeanVecModel(
+        FieldInfo fieldInfo,
+        Supplier<KNNVectorValues<?>> knnVectorValuesSupplier,
+        int totalLiveDocs
+    ) throws IOException {
+        int dimension = getDimension(fieldInfo);
+        int leanvecDims = getLeanVecDimensions(fieldInfo);
+        if (dimension <= 0 || leanvecDims <= 0) {
+            log.warn("Cannot train LeanVec: invalid dimensions (dim={}, leanvecDims={})", dimension, leanvecDims);
+            return null;
+        }
+
+        StopWatch stopWatch = new StopWatch().start();
+
+        // Build training parameters
+        String indexDescription = getIndexDescriptionFromFieldInfo(fieldInfo);
+        Map<String, Object> trainParameters = new HashMap<>();
+        trainParameters.put(INDEX_DESCRIPTION_PARAMETER, indexDescription);
+        trainParameters.put(SPACE_TYPE, fieldInfo.attributes().getOrDefault(SPACE_TYPE, "l2"));
+        trainParameters.put(INDEX_THREAD_QTY, KNNSettings.getIndexThreadQty());
+        trainParameters.put(VECTOR_DATA_TYPE_FIELD, VectorDataType.FLOAT.getValue());
+
+        // Cap training vectors at MAX_TRAINING_VECTORS to bound off-heap memory (C4 fix)
+        int trainingCount = Math.min(totalLiveDocs, MAX_TRAINING_VECTORS);
+        // Calculate sampling step for uniform sampling when totalLiveDocs > MAX_TRAINING_VECTORS (W5)
+        int sampleStep = totalLiveDocs > MAX_TRAINING_VECTORS ? totalLiveDocs / MAX_TRAINING_VECTORS : 1;
+
+        int bytesPerVector = dimension * Float.BYTES;
+        try (OffHeapFloatVectorTransfer vectorTransfer = new OffHeapFloatVectorTransfer(bytesPerVector, trainingCount)) {
+            KNNVectorValues<?> knnVectorValues = knnVectorValuesSupplier.get();
+            knnVectorValues.nextDoc();
+
+            int transferred = 0;
+            int docIndex = 0;
+            while (knnVectorValues.docId() != DocIdSetIterator.NO_MORE_DOCS && transferred < trainingCount) {
+                // W8: Check for thread interruption during long training transfers
+                if (Thread.currentThread().isInterrupted()) {
+                    log.warn("LeanVec training interrupted for field {}", fieldInfo.name);
+                    return null;
+                }
+
+                if (docIndex % sampleStep == 0) {
+                    float[] vector = (float[]) knnVectorValues.getVector();
+                    vectorTransfer.transfer(vector, true);
+                    transferred++;
+                }
+                docIndex++;
+                knnVectorValues.nextDoc();
+            }
+            vectorTransfer.flush(true);
+
+            long vectorAddress = vectorTransfer.getVectorAddress();
+
+            // TODO: Consider replacing AccessController.doPrivileged when codebase moves to module system (W1)
+            byte[] modelBlob = AccessController.doPrivileged((PrivilegedAction<byte[]>) () -> {
+                return JNIService.trainIndex(trainParameters, dimension, vectorAddress, KNNEngine.FAISS);
+            });
+
+            if (modelBlob == null || modelBlob.length == 0) {
+                log.error("LeanVec training produced empty model blob for field {}", fieldInfo.name);
+                return null;
+            }
+
+            long timeMs = stopWatch.stop().totalTime().millis();
+            log.info(
+                "[Merge] LeanVec training complete for field {} ({} vectors sampled from {}, {}ms, blob={}KB)",
+                fieldInfo.name,
+                transferred,
+                totalLiveDocs,
+                timeMs,
+                modelBlob.length / 1024
+            );
+
+            return modelBlob;
+        } catch (Exception e) {
+            log.error("Failed to train LeanVec model for field {}: {}", fieldInfo.name, e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * Extracts the index_description from field attributes PARAMETERS JSON.
+     * Throws IllegalStateException if parameters cannot be parsed or index_description is missing (W2 fix).
+     */
+    private static String getIndexDescriptionFromFieldInfo(FieldInfo fieldInfo) {
+        String parametersString = fieldInfo.attributes().get(PARAMETERS);
+        if (parametersString != null) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> params = org.opensearch.common.xcontent.XContentHelper.createParser(
+                    org.opensearch.core.xcontent.NamedXContentRegistry.EMPTY,
+                    org.opensearch.core.xcontent.DeprecationHandler.THROW_UNSUPPORTED_OPERATION,
+                    new org.opensearch.core.common.bytes.BytesArray(parametersString),
+                    org.opensearch.core.xcontent.MediaTypeRegistry.getDefaultMediaType()
+                ).map();
+                Object desc = params.get(INDEX_DESCRIPTION_PARAMETER);
+                if (desc != null) {
+                    return desc.toString();
+                }
+            } catch (Exception e) {
+                throw new IllegalStateException(
+                    "Failed to parse parameters for index_description on field " + fieldInfo.name + ": " + e.getMessage(), e
+                );
+            }
+        }
+        throw new IllegalStateException(
+            "Cannot determine index_description for deferred LeanVec training on field " + fieldInfo.name
+            + ": no parameters attribute found"
+        );
+    }
+
+    /**
+     * Derives a shard identifier from the segment write state directory.
+     * Used as the key for ShardModelCache.
+     */
+    private String getShardId() {
+        return segmentWriteState.directory.toString();
     }
 }

@@ -23,6 +23,7 @@ import org.opensearch.knn.index.engine.KNNEngine;
 import org.opensearch.knn.index.engine.KNNLibraryIndexingContext;
 import org.opensearch.knn.index.engine.KNNMethodConfigContext;
 import org.opensearch.knn.index.engine.KNNMethodContext;
+import org.opensearch.knn.index.engine.MethodComponentContext;
 import org.opensearch.knn.index.engine.qframe.QuantizationConfig;
 import org.opensearch.knn.index.engine.qframe.QuantizationConfigParser;
 
@@ -32,8 +33,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_DEFAULT_THRESHOLD;
+import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_ENABLED;
+import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_LEANVEC_DIMS;
+import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_THRESHOLD;
 import static org.opensearch.knn.common.KNNConstants.DIMENSION;
+import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_ENCODER_LEANVEC;
 import static org.opensearch.knn.common.KNNConstants.KNN_ENGINE;
+import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_DIMENSIONS;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD;
 import static org.opensearch.knn.common.KNNConstants.PARAMETERS;
 import static org.opensearch.knn.common.KNNConstants.QFRAMEWORK_CONFIG;
 import static org.opensearch.knn.common.KNNConstants.SPACE_TYPE;
@@ -200,6 +209,9 @@ public class EngineFieldMapper extends KNNVectorFieldMapper {
                 throw new RuntimeException(String.format("Unable to create KNNVectorFieldMapper: %s", ioe), ioe);
             }
 
+            // Add deferred training attributes for LeanVec without model_id
+            addDeferredTrainingAttributes(resolvedKnnMethodContext, knnMappingConfig.getDimension());
+
             if (useLuceneBasedVectorField) {
                 int adjustedDimension = mappedFieldType.vectorDataType == VectorDataType.BINARY
                     ? knnMappingConfig.getDimension() / 8
@@ -301,5 +313,55 @@ public class EngineFieldMapper extends KNNVectorFieldMapper {
     void updateEngineStats() {
         Optional.ofNullable(originalMappingParameters)
             .ifPresent(params -> params.getResolvedKnnMethodContext().getKnnEngine().setInitialized(true));
+    }
+
+    /**
+     * Adds deferred training attributes to the field type when LeanVec encoder is used without a model_id.
+     * These attributes signal to the codec layer that deferred per-shard training should be used.
+     */
+    private void addDeferredTrainingAttributes(KNNMethodContext methodContext, int dimension) {
+        if (methodContext == null) {
+            return;
+        }
+        MethodComponentContext encoderContext = getEncoderContext(methodContext);
+        if (encoderContext == null || !FAISS_SVS_ENCODER_LEANVEC.equals(encoderContext.getName())) {
+            return;
+        }
+
+        // LeanVec without model_id → enable deferred training
+        this.fieldType.putAttribute(DEFERRED_TRAINING_ENABLED, "true");
+
+        // Get training threshold from encoder parameters (default: 100000)
+        Map<String, Object> encoderParams = encoderContext.getParameters();
+        int threshold = DEFERRED_TRAINING_DEFAULT_THRESHOLD;
+        if (encoderParams != null && encoderParams.containsKey(METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD)) {
+            threshold = ((Number) encoderParams.get(METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD)).intValue();
+        }
+        this.fieldType.putAttribute(DEFERRED_TRAINING_THRESHOLD, String.valueOf(threshold));
+
+        // Get LeanVec target dimensions (default: dim/2 if not specified or 0)
+        int leanvecDims = 0;
+        if (encoderParams != null && encoderParams.containsKey(METHOD_PARAMETER_LEANVEC_DIMENSIONS)) {
+            leanvecDims = ((Number) encoderParams.get(METHOD_PARAMETER_LEANVEC_DIMENSIONS)).intValue();
+        }
+        if (leanvecDims <= 0) {
+            leanvecDims = (dimension + 1) / 2; // SVS default
+        }
+        this.fieldType.putAttribute(DEFERRED_TRAINING_LEANVEC_DIMS, String.valueOf(leanvecDims));
+    }
+
+    /**
+     * Extracts the encoder MethodComponentContext from a KNNMethodContext, if present.
+     */
+    private static MethodComponentContext getEncoderContext(KNNMethodContext methodContext) {
+        MethodComponentContext methodComponent = methodContext.getMethodComponentContext();
+        if (methodComponent == null || methodComponent.getParameters() == null) {
+            return null;
+        }
+        Object encoder = methodComponent.getParameters().get(METHOD_ENCODER_PARAMETER);
+        if (encoder instanceof MethodComponentContext) {
+            return (MethodComponentContext) encoder;
+        }
+        return null;
     }
 }

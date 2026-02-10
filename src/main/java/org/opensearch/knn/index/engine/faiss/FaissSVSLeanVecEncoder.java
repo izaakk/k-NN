@@ -19,6 +19,8 @@ import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_ENCODER_LEANVEC;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_PRIMARY_BITS;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_DIMENSIONS;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD;
+import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_DEFAULT_THRESHOLD;
 
 /**
  * LeanVec (Adaptive vector quantization) encoder for SVS indexes.
@@ -45,7 +47,16 @@ public class FaissSVSLeanVecEncoder implements Encoder {
             METHOD_PARAMETER_LEANVEC_DIMENSIONS,
             new Parameter.IntegerParameter(METHOD_PARAMETER_LEANVEC_DIMENSIONS, 0, (v, context) -> v >= 0)
         )
-        .setRequiresTraining(true)  // LeanVec requires training to compute transformation matrices
+        .addParameter(
+            METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD,
+            new Parameter.IntegerParameter(
+                METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD,
+                DEFERRED_TRAINING_DEFAULT_THRESHOLD,
+                (v, context) -> v >= 0
+            )
+        )
+        // LeanVec no longer requires explicit pre-training — deferred per-shard training
+        // triggers automatically during segment merges when the vector count crosses the threshold
         .setKnnLibraryIndexingContextGenerator(
             ((methodComponent, methodComponentContext, knnMethodConfigContext) -> {
                 MethodAsMapBuilder builder = MethodAsMapBuilder.builder(
