@@ -53,7 +53,7 @@ public final class LeanVecModelReader {
         }
         int fieldNumber = fieldInfo.getFieldNumber();
 
-        try (IndexInput input = segmentReadState.directory.openInput(fileName, IOContext.READONCE)) {
+        try (IndexInput input = segmentReadState.directory.openInput(fileName, IOContext.DEFAULT)) {
             CodecUtil.checkIndexHeader(
                 input,
                 LeanVecModelWriter.LEANVEC_MODEL_DATA_CODEC,
@@ -121,7 +121,7 @@ public final class LeanVecModelReader {
             return null;
         }
 
-        try (IndexInput input = dir.openInput(fileName, IOContext.READONCE)) {
+        try (IndexInput input = dir.openInput(fileName, IOContext.DEFAULT)) {
             CodecUtil.checkIndexHeader(
                 input,
                 LeanVecModelWriter.LEANVEC_MODEL_DATA_CODEC,
@@ -159,6 +159,9 @@ public final class LeanVecModelReader {
             input.seek(position);
             byte[] modelBlob = new byte[length];
             input.readBytes(modelBlob, 0, length);
+
+            // C-R4-2: Verify CRC integrity (consistent with read() method).
+            CodecUtil.checksumEntireFile(input);
 
             return modelBlob;
         }
