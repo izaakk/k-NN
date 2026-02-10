@@ -261,13 +261,13 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
 
     @Override
     public void close() throws IOException {
-        if (quantizationStateWriter != null) {
-            quantizationStateWriter.closeOutput();
-        }
-        if (leanVecModelWriter != null) {
-            leanVecModelWriter.closeOutput();
-        }
-        IOUtils.close(flatVectorsWriter);
+        // C-R3-3/W-R3-1: Use IOUtils.close() to ensure all resources are released even if
+        // earlier closes throw. LeanVecModelWriter implements Closeable. Wrap quantization
+        // state writer's closeOutput in a Closeable lambda since it doesn't implement Closeable.
+        java.io.Closeable quantizationCloseable = quantizationStateWriter != null
+            ? () -> quantizationStateWriter.closeOutput()
+            : null;
+        IOUtils.close(quantizationCloseable, leanVecModelWriter, flatVectorsWriter);
     }
 
     /**
@@ -461,14 +461,28 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
         }
     }
 
-    // Note: After node restart, the ShardModelCache is empty. The model will be re-trained
-    // during the first merge that crosses the training threshold. The .knnlvm segment files
-    // provide durable storage for future use (e.g., recovery from segment files), but the
-    // current v1 implementation relies on the in-memory cache as the primary lookup mechanism.
-    // Future enhancement: load models from segment files into cache during shard recovery.
+    // KNOWN LIMITATION (C-R3-5): After node restart, the ShardModelCache is empty. The model
+    // will be re-trained during the first merge that crosses the training threshold.
+    //
+    // Impact:
+    // 1. Between restart and re-training, new segments use LVQ fallback encoding
+    // 2. Re-training produces a new PCA matrix (data-dependent), which may differ from the original
+    // 3. Mixed LeanVec+LVQ segments in the same shard may have slightly different recall characteristics
+    //
+    // Recommendation: After node restart, run _forcemerge to trigger re-training promptly.
+    //
+    // The .knnlvm segment files provide durable storage. A future enhancement should load models
+    // from segment files into cache during shard recovery (using LeanVecModelReader.readFromSegment()).
+    // This would eliminate the LVQ fallback window after restart.
 
     /**
      * Writes a LeanVec model blob to the output segment file.
+     *
+     * C-R3-1 note: The .knnlvm file is automatically tracked by Lucene's TrackingDirectoryWrapper
+     * because it is created via segmentWriteState.directory.createOutput() in LeanVecModelWriter.
+     * After the codec finishes, IndexWriter calls si.setFiles(wrapper.getCreatedFiles()) which
+     * includes our file. This is the same pattern used by engine files (.faiss) and quantization
+     * state files (.knnq) — none of them call segmentInfo.addFile() explicitly.
      */
     private void writeLeanVecModelToSegment(int fieldNumber, byte[] modelBlob) throws IOException {
         initLeanVecModelWriterIfNecessary();
@@ -495,76 +509,86 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
         int dimension = getDimension(fieldInfo);
         int leanvecDims = getLeanVecDimensions(fieldInfo);
         if (dimension <= 0 || leanvecDims <= 0) {
+            // W-R3-7: Record failure on early return so circuit breaker and stats are accurate
             log.warn("Cannot train LeanVec: invalid dimensions (dim={}, leanvecDims={})", dimension, leanvecDims);
             return null;
         }
 
+        // W-R3-7: Track timing with try-finally to ensure StopWatch is always stopped
         StopWatch stopWatch = new StopWatch().start();
+        boolean stopped = false;
+        try {
+            // Build training parameters
+            String indexDescription = getIndexDescriptionFromFieldInfo(fieldInfo);
+            Map<String, Object> trainParameters = new HashMap<>();
+            trainParameters.put(INDEX_DESCRIPTION_PARAMETER, indexDescription);
+            trainParameters.put(SPACE_TYPE, fieldInfo.attributes().getOrDefault(SPACE_TYPE, "l2"));
+            trainParameters.put(INDEX_THREAD_QTY, KNNSettings.getIndexThreadQty());
+            trainParameters.put(VECTOR_DATA_TYPE_FIELD, VectorDataType.FLOAT.getValue());
 
-        // Build training parameters
-        String indexDescription = getIndexDescriptionFromFieldInfo(fieldInfo);
-        Map<String, Object> trainParameters = new HashMap<>();
-        trainParameters.put(INDEX_DESCRIPTION_PARAMETER, indexDescription);
-        trainParameters.put(SPACE_TYPE, fieldInfo.attributes().getOrDefault(SPACE_TYPE, "l2"));
-        trainParameters.put(INDEX_THREAD_QTY, KNNSettings.getIndexThreadQty());
-        trainParameters.put(VECTOR_DATA_TYPE_FIELD, VectorDataType.FLOAT.getValue());
+            // Cap training vectors at MAX_TRAINING_VECTORS to bound off-heap memory (C4 fix)
+            int trainingCount = Math.min(totalLiveDocs, MAX_TRAINING_VECTORS);
+            // Calculate sampling step for uniform sampling when totalLiveDocs > MAX_TRAINING_VECTORS (W5)
+            int sampleStep = totalLiveDocs > MAX_TRAINING_VECTORS ? totalLiveDocs / MAX_TRAINING_VECTORS : 1;
 
-        // Cap training vectors at MAX_TRAINING_VECTORS to bound off-heap memory (C4 fix)
-        int trainingCount = Math.min(totalLiveDocs, MAX_TRAINING_VECTORS);
-        // Calculate sampling step for uniform sampling when totalLiveDocs > MAX_TRAINING_VECTORS (W5)
-        int sampleStep = totalLiveDocs > MAX_TRAINING_VECTORS ? totalLiveDocs / MAX_TRAINING_VECTORS : 1;
+            int bytesPerVector = dimension * Float.BYTES;
+            try (OffHeapFloatVectorTransfer vectorTransfer = new OffHeapFloatVectorTransfer(bytesPerVector, trainingCount)) {
+                KNNVectorValues<?> knnVectorValues = knnVectorValuesSupplier.get();
+                knnVectorValues.nextDoc();
 
-        int bytesPerVector = dimension * Float.BYTES;
-        try (OffHeapFloatVectorTransfer vectorTransfer = new OffHeapFloatVectorTransfer(bytesPerVector, trainingCount)) {
-            KNNVectorValues<?> knnVectorValues = knnVectorValuesSupplier.get();
-            knnVectorValues.nextDoc();
+                int transferred = 0;
+                int docIndex = 0;
+                while (knnVectorValues.docId() != DocIdSetIterator.NO_MORE_DOCS && transferred < trainingCount) {
+                    // W8: Check for thread interruption during long training transfers
+                    if (Thread.currentThread().isInterrupted()) {
+                        log.warn("LeanVec training interrupted for field {}", fieldInfo.name);
+                        return null;
+                    }
 
-            int transferred = 0;
-            int docIndex = 0;
-            while (knnVectorValues.docId() != DocIdSetIterator.NO_MORE_DOCS && transferred < trainingCount) {
-                // W8: Check for thread interruption during long training transfers
-                if (Thread.currentThread().isInterrupted()) {
-                    log.warn("LeanVec training interrupted for field {}", fieldInfo.name);
+                    if (docIndex % sampleStep == 0) {
+                        float[] vector = (float[]) knnVectorValues.getVector();
+                        vectorTransfer.transfer(vector, true);
+                        transferred++;
+                    }
+                    docIndex++;
+                    knnVectorValues.nextDoc();
+                }
+                vectorTransfer.flush(true);
+
+                long vectorAddress = vectorTransfer.getVectorAddress();
+
+                // TODO: Consider replacing AccessController.doPrivileged when codebase moves to module system (W1)
+                byte[] modelBlob = AccessController.doPrivileged((PrivilegedAction<byte[]>) () -> {
+                    return JNIService.trainIndex(trainParameters, dimension, vectorAddress, KNNEngine.FAISS);
+                });
+
+                if (modelBlob == null || modelBlob.length == 0) {
+                    log.error("LeanVec training produced empty model blob for field {}", fieldInfo.name);
                     return null;
                 }
 
-                if (docIndex % sampleStep == 0) {
-                    float[] vector = (float[]) knnVectorValues.getVector();
-                    vectorTransfer.transfer(vector, true);
-                    transferred++;
-                }
-                docIndex++;
-                knnVectorValues.nextDoc();
+                long timeMs = stopWatch.stop().totalTime().millis();
+                stopped = true;
+                log.info(
+                    "[Merge] LeanVec training complete for field {} ({} vectors sampled from {}, {}ms, blob={}KB)",
+                    fieldInfo.name,
+                    transferred,
+                    totalLiveDocs,
+                    timeMs,
+                    modelBlob.length / 1024
+                );
+
+                return modelBlob;
             }
-            vectorTransfer.flush(true);
-
-            long vectorAddress = vectorTransfer.getVectorAddress();
-
-            // TODO: Consider replacing AccessController.doPrivileged when codebase moves to module system (W1)
-            byte[] modelBlob = AccessController.doPrivileged((PrivilegedAction<byte[]>) () -> {
-                return JNIService.trainIndex(trainParameters, dimension, vectorAddress, KNNEngine.FAISS);
-            });
-
-            if (modelBlob == null || modelBlob.length == 0) {
-                log.error("LeanVec training produced empty model blob for field {}", fieldInfo.name);
-                return null;
-            }
-
-            long timeMs = stopWatch.stop().totalTime().millis();
-            log.info(
-                "[Merge] LeanVec training complete for field {} ({} vectors sampled from {}, {}ms, blob={}KB)",
-                fieldInfo.name,
-                transferred,
-                totalLiveDocs,
-                timeMs,
-                modelBlob.length / 1024
-            );
-
-            return modelBlob;
         } catch (IOException | IllegalStateException | IllegalArgumentException e) {
             // W-13 fix: Only catch expected training failures; let OOM/Error propagate
             log.error("Failed to train LeanVec model for field {}: {}", fieldInfo.name, e.getMessage(), e);
             return null;
+        } finally {
+            // W-R3-7: Ensure StopWatch is stopped on all exit paths (early returns, exceptions)
+            if (!stopped) {
+                try { stopWatch.stop(); } catch (IllegalStateException ignored) { }
+            }
         }
     }
 
@@ -581,7 +605,7 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
                     org.opensearch.core.xcontent.NamedXContentRegistry.EMPTY,
                     org.opensearch.core.xcontent.DeprecationHandler.THROW_UNSUPPORTED_OPERATION,
                     new org.opensearch.core.common.bytes.BytesArray(parametersString),
-                    org.opensearch.core.xcontent.MediaTypeRegistry.getDefaultMediaType()
+                    org.opensearch.core.xcontent.MediaTypeRegistry.JSON  // W-R3-8: explicit JSON, not runtime default
                 ).map();
                 Object desc = params.get(INDEX_DESCRIPTION_PARAMETER);
                 if (desc != null) {

@@ -87,22 +87,25 @@ public final class ShardModelCache {
 
     /**
      * Gets a cached model blob for a field.
+     * Returns a defensive copy to prevent JNI-layer mutation of the cached model (C-R3-6 fix).
      *
      * @param fieldName the vector field name
-     * @return the model blob, or null if not cached
+     * @return a copy of the model blob, or null if not cached
      */
     public byte[] getModel(String fieldName) {
-        return models.get(fieldName);
+        byte[] blob = models.get(fieldName);
+        return blob != null ? blob.clone() : null;
     }
 
     /**
      * Stores a model blob in the cache.
+     * Stores a defensive copy to prevent callers from modifying the cached model (C-R3-6 fix).
      *
      * @param fieldName the vector field name
      * @param modelBlob the model blob bytes
      */
     public void putModel(String fieldName, byte[] modelBlob) {
-        models.put(fieldName, modelBlob);
+        models.put(fieldName, modelBlob.clone());
         failureCounts.remove(fieldName);
     }
 

@@ -43,6 +43,7 @@ import static org.opensearch.knn.common.FieldInfoExtractor.extractKNNEngine;
 import static org.opensearch.knn.common.FieldInfoExtractor.extractVectorDataType;
 import static org.opensearch.knn.common.FieldInfoExtractor.isDeferredLeanVecEnabled;
 import static org.opensearch.knn.common.KNNConstants.INDEX_DESCRIPTION_PARAMETER;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD;
 import static org.opensearch.knn.common.KNNConstants.MODEL_ID;
 import static org.opensearch.knn.common.KNNConstants.SHARD_MODEL_BLOB_PARAMETER;
 import static org.opensearch.knn.common.KNNConstants.PARAMETERS;
@@ -247,12 +248,13 @@ public class NativeIndexWriter {
             }
             parameters.put(PARAMETERS, algoParams);
         } else {
+            // W-R3-8: Use explicit JSON media type, not runtime-dependent default
             parameters.putAll(
                 XContentHelper.createParser(
                     NamedXContentRegistry.EMPTY,
                     DeprecationHandler.THROW_UNSUPPORTED_OPERATION,
                     new BytesArray(parametersString),
-                    MediaTypeRegistry.getDefaultMediaType()
+                    MediaTypeRegistry.JSON
                 ).map()
             );
         }
@@ -373,7 +375,33 @@ public class NativeIndexWriter {
         parameters.put(INDEX_DESCRIPTION_PARAMETER, fallbackDesc);
         log.debug("Deferred training fallback: swapped index_description from '{}' to '{}'", desc, fallbackDesc);
 
+        // C-R3-4: Remove training_threshold from nested encoder parameters before passing to JNI.
+        // training_threshold is a codec-layer parameter with no meaning to FAISS/SVS.
+        removeLeanVecTrainingThreshold(parameters);
+
         return parameters;
+    }
+
+    /**
+     * Removes training_threshold from the nested encoder parameters (C-R3-4 fix).
+     * training_threshold is a codec-layer parameter that leaks through MethodComponent's
+     * getParameterMapWithDefaultsAdded() into the FAISS parameters JSON. It has no meaning
+     * to FAISS/SVS and may cause JNI errors if the native layer rejects unknown parameters.
+     */
+    @SuppressWarnings("unchecked")
+    private static void removeLeanVecTrainingThreshold(Map<String, Object> parameters) {
+        Object subParamsObj = parameters.get(PARAMETERS);
+        if (subParamsObj instanceof Map) {
+            Map<String, Object> subParams = (Map<String, Object>) subParamsObj;
+            Object encoderObj = subParams.get("encoder");
+            if (encoderObj instanceof Map) {
+                Map<String, Object> encoder = (Map<String, Object>) encoderObj;
+                Object encoderParamsObj = encoder.get("parameters");
+                if (encoderParamsObj instanceof Map) {
+                    ((Map<String, Object>) encoderParamsObj).remove(METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD);
+                }
+            }
+        }
     }
 
     private Model getModel(FieldInfo fieldInfo) {

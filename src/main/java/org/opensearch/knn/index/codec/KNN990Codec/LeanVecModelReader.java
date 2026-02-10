@@ -16,6 +16,7 @@ import org.apache.lucene.store.IndexInput;
 import org.opensearch.knn.common.KNNConstants;
 
 import java.io.IOException;
+import java.util.Arrays;
 
 /**
  * Reads LeanVec model blobs from Lucene segment files (.knnlvm).
@@ -92,7 +93,9 @@ public final class LeanVecModelReader {
             byte[] modelBlob = new byte[length];
             input.readBytes(modelBlob, 0, length);
 
-            CodecUtil.retrieveChecksum(input);
+            // C-R3-2: Actually verify CRC integrity, not just retrieve stored checksum.
+            // checksumEntireFile() clones the input, reads from start, and validates the footer CRC.
+            CodecUtil.checksumEntireFile(input);
 
             return modelBlob;
         }
@@ -161,13 +164,11 @@ public final class LeanVecModelReader {
         }
     }
 
+    /**
+     * Checks file existence using listAll() instead of opening a full IndexInput (W-R3-3 fix).
+     * Avoids unnecessary mmap/file descriptor allocation on every merge for every field.
+     */
     private static boolean fileExistsInSegment(Directory dir, String fileName) throws IOException {
-        try {
-            dir.openInput(fileName, IOContext.READONCE).close();
-            return true;
-        } catch (java.io.FileNotFoundException | java.nio.file.NoSuchFileException e) {
-            return false;
-        }
-        // Other IOExceptions (disk errors, permission issues) propagate to caller (W-6 fix)
+        return Arrays.asList(dir.listAll()).contains(fileName);
     }
 }

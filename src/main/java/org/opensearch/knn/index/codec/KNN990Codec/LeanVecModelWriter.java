@@ -12,6 +12,7 @@ import org.apache.lucene.index.SegmentWriteState;
 import org.apache.lucene.store.IndexOutput;
 import org.opensearch.knn.common.KNNConstants;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -35,8 +36,9 @@ import java.util.List;
  * Footer (CodecUtil footer with CRC32)
  *
  * Follows the same pattern as {@link KNN990QuantizationStateWriter}.
+ * Implements Closeable to ensure IndexOutput is properly released (C-R3-3 fix).
  */
-public final class LeanVecModelWriter {
+public final class LeanVecModelWriter implements Closeable {
 
     static final String LEANVEC_MODEL_DATA_CODEC = "NativeEngines990KnnVectorsFormatLeanVecModelData";
     static final int LEANVEC_MODEL_VERSION = 0;
@@ -91,8 +93,18 @@ public final class LeanVecModelWriter {
         CodecUtil.writeFooter(output);
     }
 
+    /**
+     * Closes the underlying IndexOutput. Alias for {@link #close()} for backward compatibility.
+     */
     public void closeOutput() throws IOException {
-        output.close();
+        close();
+    }
+
+    @Override
+    public void close() throws IOException {
+        if (output != null) {
+            output.close();
+        }
     }
 
     @AllArgsConstructor
