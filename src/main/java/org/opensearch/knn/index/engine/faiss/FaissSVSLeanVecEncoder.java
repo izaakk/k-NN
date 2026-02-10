@@ -52,7 +52,7 @@ public class FaissSVSLeanVecEncoder implements Encoder {
             new Parameter.IntegerParameter(
                 METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD,
                 DEFERRED_TRAINING_DEFAULT_THRESHOLD,
-                (v, context) -> v >= 0
+                (v, context) -> v == 0 || v >= 1000  // W-9: 0=use default, otherwise must be >= 1000
             )
         )
         // LeanVec no longer requires explicit pre-training — deferred per-shard training

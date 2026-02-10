@@ -175,6 +175,9 @@ public class KNNStats {
             .put(StatNames.MODEL_INDEX_STATUS.getName(), createClusterStat(new ModelIndexStatusSupplier<>(ModelDao::getHealthStatus)))
             .put(StatNames.TRAINING_REQUESTS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.TRAINING_REQUESTS)))
             .put(StatNames.TRAINING_ERRORS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.TRAINING_ERRORS)))
+            .put(StatNames.DEFERRED_TRAINING_REQUESTS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.DEFERRED_TRAINING_REQUESTS)))
+            .put(StatNames.DEFERRED_TRAINING_SUCCESS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.DEFERRED_TRAINING_SUCCESS)))
+            .put(StatNames.DEFERRED_TRAINING_ERRORS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.DEFERRED_TRAINING_ERRORS)))
             .put(
                 StatNames.TRAINING_MEMORY_USAGE.getName(),
                 createNodeStat(new NativeMemoryCacheManagerSupplier<>(NativeMemoryCacheManager::getTrainingSizeInKilobytes))

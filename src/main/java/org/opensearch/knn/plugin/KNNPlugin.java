@@ -370,7 +370,7 @@ public class KNNPlugin extends Plugin
             indexModule.addIndexOperationListener(new DerivedSourceIndexOperationListener());
         }
 
-        // Clean up ShardModelCache when shards close (C3: prevent memory leak from stale caches)
+        // Clean up ShardModelCache when shards close (C-1 fix: use path-based key matching)
         indexModule.addIndexEventListener(new IndexEventListener() {
             @Override
             public void afterIndexShardClosed(
@@ -378,7 +378,7 @@ public class KNNPlugin extends Plugin
                 org.opensearch.index.shard.IndexShard indexShard,
                 Settings settings
             ) {
-                ShardModelCache.removeInstance(shardId.toString());
+                ShardModelCache.removeInstancesForShard(shardId);
             }
         });
     }

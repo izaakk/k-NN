@@ -172,6 +172,12 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
 
             StopWatch stopWatch = new StopWatch().start();
             writer.flushIndex(knnVectorValuesSupplier, totalLiveDocs);
+
+            // Persist model blob to segment file during flush so it survives node restart (C-3 fix)
+            if (shardModelBlob != null) {
+                writeLeanVecModelToSegment(fieldInfo.getFieldNumber(), shardModelBlob);
+            }
+
             long time_in_millis = stopWatch.stop().totalTime().millis();
             KNNGraphValue.REFRESH_TOTAL_TIME_IN_MILLIS.incrementBy(time_in_millis);
             log.debug("Flush took {} ms for vector field [{}]", time_in_millis, fieldInfo.getName());
@@ -555,7 +561,8 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
             );
 
             return modelBlob;
-        } catch (Exception e) {
+        } catch (IOException | IllegalStateException | IllegalArgumentException e) {
+            // W-13 fix: Only catch expected training failures; let OOM/Error propagate
             log.error("Failed to train LeanVec model for field {}: {}", fieldInfo.name, e.getMessage(), e);
             return null;
         }
@@ -593,10 +600,21 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
     }
 
     /**
-     * Derives a shard identifier from the segment write state directory.
-     * Used as the key for ShardModelCache.
+     * Derives a stable shard identifier from the segment write state directory.
+     * Unwraps FilterDirectory wrappers to get the underlying FSDirectory path,
+     * which produces a consistent key like "/data/nodes/0/indices/&lt;uuid&gt;/&lt;shard&gt;/index".
+     *
+     * This must match the key used by ShardModelCache.removeInstancesForShard() in KNNPlugin
+     * to prevent memory leaks (C-1 fix).
      */
     private String getShardId() {
+        org.apache.lucene.store.Directory dir = segmentWriteState.directory;
+        while (dir instanceof org.apache.lucene.store.FilterDirectory) {
+            dir = ((org.apache.lucene.store.FilterDirectory) dir).getDelegate();
+        }
+        if (dir instanceof org.apache.lucene.store.FSDirectory) {
+            return ((org.apache.lucene.store.FSDirectory) dir).getDirectory().toString();
+        }
         return segmentWriteState.directory.toString();
     }
 }

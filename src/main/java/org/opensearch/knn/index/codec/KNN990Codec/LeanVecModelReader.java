@@ -44,7 +44,13 @@ public final class LeanVecModelReader {
             return null;
         }
 
-        int fieldNumber = segmentReadState.fieldInfos.fieldInfo(fieldName).getFieldNumber();
+        // C-6 fix: guard against missing field in segment
+        org.apache.lucene.index.FieldInfo fieldInfo = segmentReadState.fieldInfos.fieldInfo(fieldName);
+        if (fieldInfo == null) {
+            log.debug("Field '{}' not found in segment, skipping model read", fieldName);
+            return null;
+        }
+        int fieldNumber = fieldInfo.getFieldNumber();
 
         try (IndexInput input = segmentReadState.directory.openInput(fileName, IOContext.READONCE)) {
             CodecUtil.checkIndexHeader(
@@ -155,12 +161,13 @@ public final class LeanVecModelReader {
         }
     }
 
-    private static boolean fileExistsInSegment(Directory dir, String fileName) {
+    private static boolean fileExistsInSegment(Directory dir, String fileName) throws IOException {
         try {
             dir.openInput(fileName, IOContext.READONCE).close();
             return true;
-        } catch (IOException e) {
+        } catch (java.io.FileNotFoundException | java.nio.file.NoSuchFileException e) {
             return false;
         }
+        // Other IOExceptions (disk errors, permission issues) propagate to caller (W-6 fix)
     }
 }

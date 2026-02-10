@@ -317,6 +317,8 @@ public class NativeIndexWriter {
         Map<String, Object> parameters = new HashMap<>();
         parameters.put(KNNConstants.INDEX_THREAD_QTY, KNNSettings.getIndexThreadQty());
         parameters.put(SHARD_MODEL_BLOB_PARAMETER, shardModelBlob);
+        // W-7 fix: include space_type so FAISS can configure the correct distance metric
+        parameters.put(KNNConstants.SPACE_TYPE, fieldInfo.attributes().getOrDefault(KNNConstants.SPACE_TYPE, SpaceType.DEFAULT.getValue()));
         IndexUtil.updateVectorDataTypeToParameters(parameters, VectorDataType.FLOAT);
         return parameters;
     }

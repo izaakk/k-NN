@@ -10,6 +10,7 @@ import org.apache.lucene.codecs.CompoundDirectory;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexInput;
+import org.opensearch.knn.common.KNNConstants;
 import org.opensearch.knn.index.engine.KNNEngine;
 
 import java.io.IOException;
@@ -44,7 +45,12 @@ public class KNN80CompoundDirectory extends CompoundDirectory {
 
     @Override
     public IndexInput openInput(String name, IOContext context) throws IOException {
+        // Route engine compound files (e.g., .faissc) to the outer directory
         if (KNNEngine.getEnginesThatCreateCustomSegmentFiles().stream().anyMatch(engine -> name.endsWith(engine.getCompoundExtension()))) {
+            return dir.openInput(name, context);
+        }
+        // Route LeanVec model compound files (.knnlvmc) to the outer directory (C-2 fix)
+        if (name.endsWith(KNNConstants.LEANVEC_MODEL_FILE_SUFFIX + KNNConstants.COMPOUND_EXTENSION)) {
             return dir.openInput(name, context);
         }
         return delegate.openInput(name, context);

@@ -50,7 +50,7 @@ public final class ShardModelCache {
     }
 
     /**
-     * Removes and cleans up the cache for a shard (called on shard close).
+     * Removes and cleans up the cache for a shard by exact key (called on shard close).
      */
     public static void removeInstance(String shardId) {
         ShardModelCache removed = INSTANCES.remove(shardId);
@@ -60,6 +60,29 @@ public final class ShardModelCache {
             removed.failureCounts.clear();
             log.debug("Cleaned up ShardModelCache for shard {}", shardId);
         }
+    }
+
+    /**
+     * Removes cache entries whose filesystem-path key matches the given ShardId.
+     * The key derived by NativeEngines990KnnVectorsWriter.getShardId() is a filesystem path
+     * like "/data/nodes/0/indices/&lt;uuid&gt;/&lt;shard&gt;/index". This method matches on
+     * "/indices/&lt;uuid&gt;/&lt;shard_number&gt;/" to find the right entry (C-1 fix).
+     *
+     * @param shardId the OpenSearch ShardId from the shard close event
+     */
+    public static void removeInstancesForShard(org.opensearch.core.index.shard.ShardId shardId) {
+        String pattern = "/indices/" + shardId.getIndex().getUUID() + "/" + shardId.id() + "/";
+        INSTANCES.entrySet().removeIf(entry -> {
+            if (entry.getKey().contains(pattern)) {
+                ShardModelCache cache = entry.getValue();
+                cache.models.clear();
+                cache.trainingLocks.clear();
+                cache.failureCounts.clear();
+                log.debug("Cleaned up ShardModelCache for shard {} (key: {})", shardId, entry.getKey());
+                return true;
+            }
+            return false;
+        });
     }
 
     /**
@@ -91,11 +114,10 @@ public final class ShardModelCache {
     }
 
     /**
-     * Records a training failure for circuit breaker logic.
+     * Records a training failure for circuit breaker logic (W-2 fix: use merge return value).
      */
     public void recordFailure(String fieldName) {
-        failureCounts.merge(fieldName, 1, Integer::sum);
-        int count = failureCounts.getOrDefault(fieldName, 0);
+        int count = failureCounts.merge(fieldName, 1, Integer::sum);
         if (count >= MAX_CONSECUTIVE_FAILURES) {
             log.warn("Circuit breaker: {} consecutive training failures for field {}. Suppressing further attempts.", count, fieldName);
         }
