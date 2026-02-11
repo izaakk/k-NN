@@ -28,6 +28,7 @@ import org.opensearch.env.NodeEnvironment;
 import org.opensearch.index.IndexModule;
 import org.opensearch.index.IndexSettings;
 import org.opensearch.index.shard.IndexEventListener;
+import org.opensearch.index.shard.IndexShard;
 import org.opensearch.index.codec.CodecServiceFactory;
 import org.opensearch.index.engine.EngineFactory;
 import org.opensearch.index.mapper.Mapper;
@@ -36,6 +37,7 @@ import org.opensearch.index.shard.IndexSettingProvider;
 import org.opensearch.indices.SystemIndexDescriptor;
 import org.opensearch.knn.index.KNNCircuitBreaker;
 import org.opensearch.knn.index.KNNSettings;
+import org.opensearch.knn.index.codec.KNN990Codec.LeanVecModelReader;
 import org.opensearch.knn.index.codec.KNNCodecService;
 import org.opensearch.knn.index.codec.derivedsource.DerivedSourceIndexOperationListener;
 import org.opensearch.knn.index.codec.nativeindex.NativeIndexBuildStrategyFactory;
@@ -370,8 +372,118 @@ public class KNNPlugin extends Plugin
             indexModule.addIndexOperationListener(new DerivedSourceIndexOperationListener());
         }
 
-        // Clean up ShardModelCache when shards close (C-1 fix: use path-based key matching)
+        // Manage ShardModelCache lifecycle: warm on start, clean up on close
         indexModule.addIndexEventListener(new IndexEventListener() {
+            private static final org.apache.logging.log4j.Logger logger =
+                org.apache.logging.log4j.LogManager.getLogger(KNNPlugin.class);
+
+            /**
+             * O-14 fix: After shard starts, load LeanVec models from .knnlvm segment files
+             * and seed the cumulative vector counter. This eliminates the LVQ fallback window
+             * after node restart, shard relocation, or snapshot restore.
+             *
+             * Only runs for KNN-enabled indices (O-R1-1 fix).
+             * Uses Store.incRef()/decRef() for safe directory access (L-R1-15/O-R1-2 fix).
+             */
+            @Override
+            public void afterIndexShardStarted(IndexShard indexShard) {
+                // O-R1-1: Only run for KNN-enabled indices, skip system/non-KNN indices
+                if (!indexShard.indexSettings().getValue(KNNSettings.IS_KNN_INDEX_SETTING)) {
+                    return;
+                }
+
+                // L-R1-15/O-R1-2: Acquire store ref to prevent use-after-close
+                org.opensearch.index.store.Store store = indexShard.store();
+                store.incRef();
+                try {
+                    org.apache.lucene.store.Directory dir = store.directory();
+
+                    // Derive shard cache key: unwrap to FSDirectory path (same as getShardId())
+                    // L-R1-4: Use FilterDirectory.unwrap() for consistency
+                    org.apache.lucene.store.Directory rawDir =
+                        org.apache.lucene.store.FilterDirectory.unwrap(dir);
+                    String shardCacheKey;
+                    if (rawDir instanceof org.apache.lucene.store.FSDirectory) {
+                        shardCacheKey = ((org.apache.lucene.store.FSDirectory) rawDir).getDirectory().toString();
+                    } else {
+                        shardCacheKey = dir.toString();
+                    }
+
+                    org.apache.lucene.index.SegmentInfos infos = store.readLastCommittedSegmentsInfo();
+                    if (infos == null || infos.size() == 0) return;
+
+                    long totalVectors = 0;
+                    for (org.apache.lucene.index.SegmentCommitInfo sci : infos) {
+                        totalVectors += sci.info.maxDoc() - sci.getDelCount();
+                    }
+
+                    // O-R1-4: Check if any .knnlvm files exist before opening DirectoryReader
+                    boolean hasModelFiles = false;
+                    for (String file : dir.listAll()) {
+                        if (file.endsWith(org.opensearch.knn.common.KNNConstants.LEANVEC_MODEL_FILE_SUFFIX)) {
+                            hasModelFiles = true;
+                            break;
+                        }
+                    }
+
+                    // Open DirectoryReader to access FieldInfos and find deferred-training fields
+                    try (org.apache.lucene.index.DirectoryReader reader = org.apache.lucene.index.DirectoryReader.open(dir)) {
+                        java.util.Set<String> recoveredFields = new java.util.HashSet<>();
+                        for (org.apache.lucene.index.LeafReaderContext leafCtx : reader.leaves()) {
+                            for (org.apache.lucene.index.FieldInfo fieldInfo : leafCtx.reader().getFieldInfos()) {
+                                if (recoveredFields.contains(fieldInfo.name)) continue;
+                                String deferredAttr = fieldInfo.getAttribute(
+                                    org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_ENABLED);
+                                if (!"true".equals(deferredAttr)) continue;
+
+                                ShardModelCache cache = ShardModelCache.getInstance(shardCacheKey);
+
+                                // Try to load model from any segment's .knnlvm file
+                                if (hasModelFiles && !cache.hasModel(fieldInfo.name)) {
+                                    for (org.apache.lucene.index.SegmentCommitInfo sci : infos) {
+                                        // O-R1-5/K-R1-20: Read field number from segment's own FieldInfos
+                                        org.apache.lucene.index.FieldInfos segFieldInfos =
+                                            sci.info.getCodec().fieldInfosFormat().read(
+                                                dir, sci.info, "", org.apache.lucene.store.IOContext.DEFAULT);
+                                        org.apache.lucene.index.FieldInfo segFieldInfo =
+                                            segFieldInfos.fieldInfo(fieldInfo.name);
+                                        if (segFieldInfo == null) continue;
+
+                                        byte[] model = LeanVecModelReader.readFromSegment(
+                                            dir, sci, fieldInfo.name, segFieldInfo.getFieldNumber());
+                                        if (model != null) {
+                                            cache.putModel(fieldInfo.name, model);
+                                            logger.info(
+                                                "[ShardStart] Loaded LeanVec model for field '{}' from segment '{}' (shard={})",
+                                                fieldInfo.name, sci.info.name, indexShard.shardId());
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                // Seed cumulative counter (O-R1-14: use tryMarkCounterSeeded for CAS)
+                                if (cache.tryMarkCounterSeeded(fieldInfo.name) && totalVectors > 0) {
+                                    cache.seedVectorCount(fieldInfo.name, totalVectors);
+                                    logger.info(
+                                        "[ShardStart] Seeded cumulative counter: {} vectors for field '{}' (shard={})",
+                                        totalVectors, fieldInfo.name, indexShard.shardId());
+                                }
+
+                                recoveredFields.add(fieldInfo.name);
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    // Don't let model recovery failure prevent shard from starting
+                    // O-R1-6: Include stack trace for production debugging
+                    logger.warn(
+                        "[ShardStart] Failed to recover LeanVec models for shard {}: {}",
+                        indexShard.shardId(), e.getMessage(), e);
+                } finally {
+                    store.decRef();
+                }
+            }
+
             @Override
             public void afterIndexShardClosed(
                 org.opensearch.core.index.shard.ShardId shardId,

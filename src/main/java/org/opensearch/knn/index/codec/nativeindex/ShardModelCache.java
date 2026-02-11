@@ -8,6 +8,8 @@ package org.opensearch.knn.index.codec.nativeindex;
 import lombok.extern.log4j.Log4j2;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -39,6 +41,12 @@ public final class ShardModelCache {
     /** Per-field consecutive failure counts: fieldName → count */
     private final ConcurrentHashMap<String, Integer> failureCounts = new ConcurrentHashMap<>();
 
+    /** Per-field cumulative vector counts: fieldName → count (incremented on flush only, not merge) */
+    private final ConcurrentHashMap<String, AtomicLong> cumulativeVectorCounts = new ConcurrentHashMap<>();
+
+    /** Per-field counter-seeded flags: fieldName → seeded (explicit flag to handle flush-before-merge race, O-19 fix) */
+    private final ConcurrentHashMap<String, AtomicBoolean> counterSeeded = new ConcurrentHashMap<>();
+
     /**
      * Gets (or creates) the cache for a given shard.
      *
@@ -58,6 +66,8 @@ public final class ShardModelCache {
             removed.models.clear();
             removed.trainingLocks.clear();
             removed.failureCounts.clear();
+            removed.cumulativeVectorCounts.clear();
+            removed.counterSeeded.clear();
             log.debug("Cleaned up ShardModelCache for shard {}", shardId);
         }
     }
@@ -78,6 +88,8 @@ public final class ShardModelCache {
                 cache.models.clear();
                 cache.trainingLocks.clear();
                 cache.failureCounts.clear();
+                cache.cumulativeVectorCounts.clear();
+                cache.counterSeeded.clear();
                 log.debug("Cleaned up ShardModelCache for shard {} (key: {})", shardId, entry.getKey());
                 return true;
             }
@@ -138,5 +150,68 @@ public final class ShardModelCache {
      */
     public boolean hasModel(String fieldName) {
         return models.containsKey(fieldName);
+    }
+
+    // ---- Cumulative vector counting (for cumulative-threshold training) ----
+
+    /**
+     * Adds vectors to the cumulative count for a field. Called from flush() only
+     * to avoid double-counting from merges (see Devil's Advocate Failure Mode 2).
+     *
+     * @param fieldName the vector field name
+     * @param count     the number of vectors to add
+     * @return the new cumulative count
+     */
+    public long addVectors(String fieldName, long count) {
+        return cumulativeVectorCounts.computeIfAbsent(fieldName, k -> new AtomicLong(0))
+            .addAndGet(count);
+    }
+
+    /**
+     * Gets the current cumulative vector count for a field.
+     *
+     * @param fieldName the vector field name
+     * @return the cumulative count, or 0 if not tracked
+     */
+    public long getCumulativeVectorCount(String fieldName) {
+        AtomicLong counter = cumulativeVectorCounts.get(fieldName);
+        return counter != null ? counter.get() : 0;
+    }
+
+    /**
+     * Seeds the counter from committed segment metadata. Used on first merge after restart
+     * to avoid a long LVQ fallback window.
+     *
+     * @param fieldName the vector field name
+     * @param count     the total number of vectors from committed segments
+     */
+    public void seedVectorCount(String fieldName, long count) {
+        cumulativeVectorCounts.computeIfAbsent(fieldName, k -> new AtomicLong(0))
+            .addAndGet(count);
+    }
+
+    /**
+     * Checks whether the cumulative counter has been seeded for a field.
+     * Uses explicit flag (not counter value) to handle flush-before-merge race (O-19 fix).
+     *
+     * @param fieldName the vector field name
+     * @return true if the counter has been seeded
+     */
+    public boolean isCounterSeeded(String fieldName) {
+        AtomicBoolean flag = counterSeeded.get(fieldName);
+        return flag != null && flag.get();
+    }
+
+    /**
+     * Atomically marks the counter as seeded using CAS, returning true only if this call
+     * transitioned the flag from false to true. Prevents double-seeding race between
+     * afterIndexShardStarted and seedCounterFromCommittedSegments (O-R1-14 fix).
+     *
+     * @param fieldName the vector field name
+     * @return true if this call won the race and the caller should seed; false if already seeded
+     */
+    public boolean tryMarkCounterSeeded(String fieldName) {
+        return counterSeeded.computeIfAbsent(fieldName, k -> new AtomicBoolean(false))
+            .compareAndSet(false, true);
     }
 }
