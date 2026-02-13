@@ -56,7 +56,9 @@ import java.util.function.Supplier;
 
 import static org.opensearch.knn.common.FieldInfoExtractor.extractVectorDataType;
 import static org.opensearch.knn.common.FieldInfoExtractor.isDeferredLeanVecEnabled;
+import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD;
 import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_DEFAULT_THRESHOLD;
+import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_INITIAL_THRESHOLD;
 import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_LEANVEC_DIMS;
 import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_THRESHOLD;
 import static org.opensearch.knn.common.KNNConstants.DIMENSION;
@@ -179,10 +181,11 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
                 ShardModelCache cache = ShardModelCache.getInstance(shardId);
                 shardModelBlob = cache.getModel(fieldInfo.name);
                 if (shardModelBlob != null) {
-                    log.info("[Flush] Encoding=LeanVec (trained model available) for field '{}' ({} vectors, segment={})",
-                        fieldInfo.name, totalLiveDocs, segmentWriteState.segmentInfo.name);
+                    ShardModelCache.ModelQuality quality = cache.getModelQuality(fieldInfo.name);
+                    log.info("[Flush] Encoding=LeanVec ({} model) for field '{}' ({} vectors, segment={})",
+                        quality, fieldInfo.name, totalLiveDocs, segmentWriteState.segmentInfo.name);
                 } else {
-                    log.info("[Flush] Encoding=LVQ (pre-training fallback) for field '{}' ({} vectors, segment={})",
+                    log.info("[Flush] Encoding=LVQ (no trained model) for field '{}' ({} vectors, segment={})",
                         fieldInfo.name, totalLiveDocs, segmentWriteState.segmentInfo.name);
                 }
             }
@@ -362,9 +365,9 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
     // ---- Deferred LeanVec training helpers ----
 
     /**
-     * Gets the training threshold for deferred LeanVec training (W6: NumberFormatException safety, S9: min threshold).
+     * Gets the final training threshold for deferred LeanVec training (W6: NumberFormatException safety, S9: min threshold).
      */
-    private static int getTrainingThreshold(FieldInfo fieldInfo) {
+    private static int getFinalTrainingThreshold(FieldInfo fieldInfo) {
         String val = fieldInfo.attributes().get(DEFERRED_TRAINING_THRESHOLD);
         if (val == null) {
             return DEFERRED_TRAINING_DEFAULT_THRESHOLD;
@@ -372,13 +375,35 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
         try {
             int threshold = Integer.parseInt(val);
             if (threshold < MIN_TRAINING_THRESHOLD) {
-                log.warn("Training threshold {} below minimum {}, using minimum", threshold, MIN_TRAINING_THRESHOLD);
+                log.warn("Final training threshold {} below minimum {}, using minimum", threshold, MIN_TRAINING_THRESHOLD);
                 return MIN_TRAINING_THRESHOLD;
             }
             return threshold;
         } catch (NumberFormatException e) {
-            log.warn("Invalid training threshold '{}', using default {}", val, DEFERRED_TRAINING_DEFAULT_THRESHOLD);
+            log.warn("Invalid final training threshold '{}', using default {}", val, DEFERRED_TRAINING_DEFAULT_THRESHOLD);
             return DEFERRED_TRAINING_DEFAULT_THRESHOLD;
+        }
+    }
+
+    /**
+     * Gets the initial training threshold for two-threshold deferred LeanVec training.
+     * Falls back to DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD (10,000).
+     */
+    private static int getInitialTrainingThreshold(FieldInfo fieldInfo) {
+        String val = fieldInfo.attributes().get(DEFERRED_TRAINING_INITIAL_THRESHOLD);
+        if (val == null) {
+            return DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD;
+        }
+        try {
+            int threshold = Integer.parseInt(val);
+            if (threshold < MIN_TRAINING_THRESHOLD) {
+                log.warn("Initial training threshold {} below minimum {}, using minimum", threshold, MIN_TRAINING_THRESHOLD);
+                return MIN_TRAINING_THRESHOLD;
+            }
+            return threshold;
+        } catch (NumberFormatException e) {
+            log.warn("Invalid initial training threshold '{}', using default {}", val, DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD);
+            return DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD;
         }
     }
 
@@ -415,14 +440,19 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
     }
 
     /**
-     * Checks if training should trigger and does so if appropriate.
-     * Returns the shard model blob (from cache or freshly trained), or null if no model available.
+     * Two-threshold training decision logic for deferred LeanVec training.
      *
-     * Uses cumulative vector counting across flushes to determine readiness.
-     * Training uses vectors from the merge itself (merge-only path).
-     * If the merge is too small, returns null (LVQ fallback — wait for a larger merge or force merge).
+     * State machine: NONE → INITIAL (10K vectors) → FINAL (100K vectors).
+     * Returns the model blob to use for this merge, or null for LVQ fallback.
      *
-     * Uses ShardModelCache for per-field locks and circuit breaker.
+     * Decision tree:
+     * - FINAL model cached → use it
+     * - INITIAL model cached + merge >= final_threshold → retrain as FINAL
+     * - INITIAL model cached + merge < final_threshold → use INITIAL
+     * - No model + cumulative < initial_threshold → LVQ (not enough vectors yet)
+     * - No model + merge >= final_threshold → train FINAL directly (skip INITIAL)
+     * - No model + merge >= initial_threshold → train INITIAL
+     * - No model + merge < initial_threshold → LVQ (wait for bigger merge)
      */
     private byte[] maybeTriggerLeanVecTraining(
         FieldInfo fieldInfo,
@@ -431,50 +461,99 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
     ) throws IOException {
         String shardId = getShardId();
         ShardModelCache cache = ShardModelCache.getInstance(shardId);
+        int initialThreshold = getInitialTrainingThreshold(fieldInfo);
+        int finalThreshold = getFinalTrainingThreshold(fieldInfo);
 
-        // 1. Check in-memory cache first
-        byte[] cachedModel = cache.getModel(fieldInfo.name);
-        if (cachedModel != null) {
-            log.info("[Merge] Encoding=LeanVec (cached model) for field '{}' ({} vectors, segment={})",
+        // 1. Read cached model — single atomic read (C-2 fix)
+        ShardModelCache.CachedModel cached = cache.getCachedModel(fieldInfo.name);
+        ShardModelCache.ModelQuality quality = (cached != null) ? cached.quality() : ShardModelCache.ModelQuality.NONE;
+
+        // 2. FINAL model exists — always use it
+        if (quality == ShardModelCache.ModelQuality.FINAL) {
+            log.info("[Merge] Encoding=LeanVec (FINAL model) for field '{}' ({} vectors, segment={})",
                 fieldInfo.name, totalLiveDocs, segmentWriteState.segmentInfo.name);
-            return cachedModel;
+            return cached.blobCopy();
         }
 
-        // 2. Seed counter on first merge after restart
+        // 3. INITIAL model exists — check if this merge can upgrade to FINAL
+        if (quality == ShardModelCache.ModelQuality.INITIAL) {
+            if (totalLiveDocs >= finalThreshold) {
+                // This merge is large enough to train the FINAL model
+                return tryTrainModel(fieldInfo, knnVectorValuesSupplier, totalLiveDocs, cache,
+                    ShardModelCache.ModelQuality.FINAL, finalThreshold);
+            }
+            // Merge too small to upgrade — use existing INITIAL model
+            log.info("[Merge] Encoding=LeanVec (INITIAL model) for field '{}' ({} vectors, segment={})",
+                fieldInfo.name, totalLiveDocs, segmentWriteState.segmentInfo.name);
+            return cached.blobCopy();
+        }
+
+        // 4. No model yet — seed counter on first merge after restart
         if (cache.tryMarkCounterSeeded(fieldInfo.name)) {
             seedCounterFromCommittedSegments(fieldInfo, cache);
         }
 
-        // 3. Cumulative threshold check (flush-only counting — merges don't add to counter)
+        // 5. Cumulative threshold check — need enough total vectors before training
         long cumulativeCount = cache.getCumulativeVectorCount(fieldInfo.name);
-        int threshold = getTrainingThreshold(fieldInfo);
-        if (cumulativeCount < threshold) {
-            log.info("[Merge] Encoding=LVQ (cumulative {} < threshold {}) for field '{}' ({} merge vectors, segment={})",
-                cumulativeCount, threshold, fieldInfo.name, totalLiveDocs, segmentWriteState.segmentInfo.name);
+        if (cumulativeCount < initialThreshold) {
+            log.info("[Merge] Encoding=LVQ (cumulative {} < initial threshold {}) for field '{}' ({} vectors, segment={})",
+                cumulativeCount, initialThreshold, fieldInfo.name, totalLiveDocs,
+                segmentWriteState.segmentInfo.name);
             return null;
         }
 
-        // 4. Merge must have >= threshold vectors to train (merge-only path)
-        if (totalLiveDocs < threshold) {
-            log.info("[Merge] Encoding=LVQ (merge {} < threshold {}) for field '{}'. "
-                + "Waiting for larger merge or force merge. (segment={})",
-                totalLiveDocs, threshold, fieldInfo.name, segmentWriteState.segmentInfo.name);
-            return null;
+        // 6. Cumulative threshold met — determine which model to train based on merge size
+        if (totalLiveDocs >= finalThreshold) {
+            // Skip INITIAL, go straight to FINAL
+            return tryTrainModel(fieldInfo, knnVectorValuesSupplier, totalLiveDocs, cache,
+                ShardModelCache.ModelQuality.FINAL, finalThreshold);
+        }
+        if (totalLiveDocs >= initialThreshold) {
+            // Train INITIAL model
+            return tryTrainModel(fieldInfo, knnVectorValuesSupplier, totalLiveDocs, cache,
+                ShardModelCache.ModelQuality.INITIAL, initialThreshold);
         }
 
-        // 5. Check circuit breaker — training suppressed after consecutive failures
-        if (cache.isTrainingSuppressed(fieldInfo.name)) {
-            log.warn("[Merge] Training suppressed by circuit breaker for field '{}' — LVQ fallback", fieldInfo.name);
-            return null;
-        }
+        // 7. Merge too small for either threshold
+        log.info("[Merge] Encoding=LVQ (merge {} < initial threshold {}) for field '{}' (segment={})",
+            totalLiveDocs, initialThreshold, fieldInfo.name, segmentWriteState.segmentInfo.name);
+        return null;
+    }
 
-        // Check KNN circuit breaker before allocating off-heap memory for training
+    /**
+     * Attempts to train a LeanVec model at the specified quality level.
+     * Handles circuit breaker, locking, training, caching, and fallback.
+     *
+     * @param fieldInfo              the field being indexed
+     * @param knnVectorValuesSupplier supplier for merge vectors
+     * @param totalLiveDocs          number of vectors in the merge
+     * @param cache                  the shard model cache
+     * @param targetQuality          the quality level to train (INITIAL or FINAL)
+     * @param threshold              the threshold that was met
+     * @return model blob if training succeeded, existing model if available, or null for LVQ fallback
+     */
+    private byte[] tryTrainModel(
+        FieldInfo fieldInfo,
+        Supplier<KNNVectorValues<?>> knnVectorValuesSupplier,
+        int totalLiveDocs,
+        ShardModelCache cache,
+        ShardModelCache.ModelQuality targetQuality,
+        int threshold
+    ) throws IOException {
+        // Circuit breaker check
+        if (cache.isTrainingSuppressed(fieldInfo.name, targetQuality)) {
+            log.warn("[Merge] {} training suppressed by circuit breaker for field '{}' — using fallback",
+                targetQuality, fieldInfo.name);
+            // Return existing model if available (INITIAL), else null (LVQ)
+            return cache.getModel(fieldInfo.name);
+        }
         if (KNNSettings.isCircuitBreakerTriggered()) {
-            log.warn("[Merge] KNN circuit breaker triggered, deferring LeanVec training for field '{}'", fieldInfo.name);
-            return null;
+            log.warn("[Merge] KNN circuit breaker triggered, deferring {} training for field '{}'",
+                targetQuality, fieldInfo.name);
+            return cache.getModel(fieldInfo.name);
         }
 
-        // 6. Acquire training lock (non-blocking, 100ms timeout)
+        // Acquire training lock (non-blocking, 100ms timeout)
         ReentrantLock lock = cache.getTrainingLock(fieldInfo.name);
         boolean acquired;
         try {
@@ -482,49 +561,109 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.warn("[Merge] Interrupted while acquiring training lock for field '{}'", fieldInfo.name);
-            return null;
+            return cache.getModel(fieldInfo.name);
         }
         if (!acquired) {
-            log.info("[Merge] Encoding=LVQ (training lock busy, another merge is training) for field '{}' (segment={})",
+            // Another merge is training — use existing model if available, else LVQ
+            byte[] existing = cache.getModel(fieldInfo.name);
+            if (existing != null) {
+                log.info("[Merge] Encoding=LeanVec (lock busy, using existing model) for field '{}' (segment={})",
+                    fieldInfo.name, segmentWriteState.segmentInfo.name);
+                return existing;
+            }
+            log.info("[Merge] Encoding=LVQ (training lock busy) for field '{}' (segment={})",
                 fieldInfo.name, segmentWriteState.segmentInfo.name);
             return null;
         }
 
         try {
-            // Double-check: model may have been created while waiting for the lock
-            cachedModel = cache.getModel(fieldInfo.name);
-            if (cachedModel != null) {
-                log.info("[Merge] Encoding=LeanVec (model appeared while waiting for lock) for field '{}' (segment={})",
-                    fieldInfo.name, segmentWriteState.segmentInfo.name);
-                return cachedModel;
+            // Double-check: model may have been upgraded while waiting for lock
+            // Single atomic read — no torn state possible (C-2 fix)
+            ShardModelCache.CachedModel current = cache.getCachedModel(fieldInfo.name);
+            ShardModelCache.ModelQuality currentQuality =
+                (current != null) ? current.quality() : ShardModelCache.ModelQuality.NONE;
+            if (!currentQuality.isUpgradeableTo(targetQuality)) {
+                // Already at or above target quality
+                if (current != null) {
+                    log.info("[Merge] Encoding=LeanVec ({} model, upgraded while waiting) for field '{}' (segment={})",
+                        currentQuality, fieldInfo.name, segmentWriteState.segmentInfo.name);
+                    return current.blobCopy();
+                }
             }
 
-            // Train from merge vectors
+            // Train — increment both aggregate and per-quality counters
             KNNCounter.DEFERRED_TRAINING_REQUESTS.increment();
-            log.info("[Merge] TRAINING STARTED: field='{}', mergeVectors={}, threshold={}, segment={}",
-                fieldInfo.name, totalLiveDocs, threshold, segmentWriteState.segmentInfo.name);
+            incrementQualityCounter(targetQuality, true, false);
+            StopWatch stopWatch = new StopWatch().start();
+            log.info("[Merge] TRAINING STARTED ({}): field='{}', mergeVectors={}, threshold={}, segment={}",
+                targetQuality, fieldInfo.name, totalLiveDocs, threshold,
+                segmentWriteState.segmentInfo.name);
 
             byte[] modelBlob = trainLeanVecModel(fieldInfo, knnVectorValuesSupplier, totalLiveDocs);
 
+            long trainingMs = stopWatch.stop().totalTime().millis();
+
             if (modelBlob != null && modelBlob.length > 0) {
-                cache.putModel(fieldInfo.name, modelBlob);
+                boolean stored = cache.putModel(fieldInfo.name, modelBlob, targetQuality);
+                if (!stored) {
+                    // Monotonicity guard rejected the store — another thread already upgraded
+                    log.info("[Merge] Model store rejected (higher quality exists) for field '{}' — using cached",
+                        fieldInfo.name);
+                    return cache.getModel(fieldInfo.name);
+                }
                 KNNCounter.DEFERRED_TRAINING_SUCCESS.increment();
-                log.info("[Merge] TRAINING COMPLETE: Encoding=LeanVec for field '{}' (segment={})",
-                    fieldInfo.name, segmentWriteState.segmentInfo.name);
+                incrementQualityCounter(targetQuality, false, true);
+                log.info("[Merge] TRAINING COMPLETE ({}, {}ms): Encoding=LeanVec for field '{}' (segment={})",
+                    targetQuality, trainingMs, fieldInfo.name, segmentWriteState.segmentInfo.name);
+                if (trainingMs > 2000) {
+                    log.warn("[Merge] Training took {}ms (>2s) for field '{}' — may impact merge throughput",
+                        trainingMs, fieldInfo.name);
+                }
                 return modelBlob;
             } else if (modelBlob == TRAINING_INTERRUPTED) {
-                log.info("[Merge] Training interrupted (not a failure) for field '{}', using LVQ fallback", fieldInfo.name);
-                return null;
+                log.info("[Merge] Training interrupted for field '{}', using fallback ({}ms)",
+                    fieldInfo.name, trainingMs);
+                // Return existing model if we have one (INITIAL), else null (LVQ)
+                return cache.getModel(fieldInfo.name);
             } else {
-                // Real failure (null return from training)
-                cache.recordFailure(fieldInfo.name);
+                cache.recordFailure(fieldInfo.name, targetQuality);
                 KNNCounter.DEFERRED_TRAINING_ERRORS.increment();
-                log.warn("[Merge] TRAINING FAILED: Encoding=LVQ fallback for field '{}' (segment={})",
-                    fieldInfo.name, segmentWriteState.segmentInfo.name);
-                return null;
+                incrementQualityCounter(targetQuality, false, false);
+                log.warn("[Merge] TRAINING FAILED ({}, {}ms): fallback for field '{}' (segment={})",
+                    targetQuality, trainingMs, fieldInfo.name, segmentWriteState.segmentInfo.name);
+                // Return existing model if we have one (INITIAL), else null (LVQ)
+                return cache.getModel(fieldInfo.name);
             }
         } finally {
             lock.unlock();
+        }
+    }
+
+    /**
+     * Increments per-quality training counters for stats endpoint visibility.
+     *
+     * @param quality  the target quality level
+     * @param isRequest true to increment the request counter (called at training start)
+     * @param isSuccess true to increment success counter, false to increment error counter
+     *                  (only used when isRequest is false)
+     */
+    private static void incrementQualityCounter(ShardModelCache.ModelQuality quality, boolean isRequest, boolean isSuccess) {
+        if (quality == ShardModelCache.ModelQuality.INITIAL) {
+            if (isRequest) {
+                KNNCounter.DEFERRED_TRAINING_INITIAL_REQUESTS.increment();
+            } else if (isSuccess) {
+                KNNCounter.DEFERRED_TRAINING_INITIAL_SUCCESS.increment();
+            } else {
+                KNNCounter.DEFERRED_TRAINING_INITIAL_ERRORS.increment();
+            }
+        } else if (quality == ShardModelCache.ModelQuality.FINAL) {
+            if (isRequest) {
+                KNNCounter.DEFERRED_TRAINING_FINAL_REQUESTS.increment();
+            } else if (isSuccess) {
+                KNNCounter.DEFERRED_TRAINING_FINAL_SUCCESS.increment();
+            } else {
+                KNNCounter.DEFERRED_TRAINING_FINAL_ERRORS.increment();
+            }
         }
     }
 

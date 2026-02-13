@@ -33,8 +33,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD;
 import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_DEFAULT_THRESHOLD;
 import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_ENABLED;
+import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_INITIAL_THRESHOLD;
 import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_LEANVEC_DIMS;
 import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_THRESHOLD;
 import static org.opensearch.knn.common.KNNConstants.DIMENSION;
@@ -42,6 +44,7 @@ import static org.opensearch.knn.common.KNNConstants.FAISS_SVS_ENCODER_LEANVEC;
 import static org.opensearch.knn.common.KNNConstants.KNN_ENGINE;
 import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_DIMENSIONS;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_INITIAL_TRAINING_THRESHOLD;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD;
 import static org.opensearch.knn.common.KNNConstants.PARAMETERS;
 import static org.opensearch.knn.common.KNNConstants.QFRAMEWORK_CONFIG;
@@ -54,6 +57,7 @@ import static org.opensearch.knn.index.mapper.KNNVectorFieldMapperUtil.createSto
 /**
  *  Field mapper for all supported engines.
  */
+@lombok.extern.log4j.Log4j2
 public class EngineFieldMapper extends KNNVectorFieldMapper {
 
     private final FieldType vectorFieldType;
@@ -331,13 +335,27 @@ public class EngineFieldMapper extends KNNVectorFieldMapper {
         // LeanVec without model_id → enable deferred training
         this.fieldType.putAttribute(DEFERRED_TRAINING_ENABLED, "true");
 
-        // Get training threshold from encoder parameters (default: 100000)
+        // Get training thresholds from encoder parameters
         Map<String, Object> encoderParams = encoderContext.getParameters();
-        int threshold = DEFERRED_TRAINING_DEFAULT_THRESHOLD;
+        int finalThreshold = DEFERRED_TRAINING_DEFAULT_THRESHOLD;
         if (encoderParams != null && encoderParams.containsKey(METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD)) {
-            threshold = ((Number) encoderParams.get(METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD)).intValue();
+            finalThreshold = ((Number) encoderParams.get(METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD)).intValue();
         }
-        this.fieldType.putAttribute(DEFERRED_TRAINING_THRESHOLD, String.valueOf(threshold));
+        int initialThreshold = DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD;
+        if (encoderParams != null && encoderParams.containsKey(METHOD_PARAMETER_LEANVEC_INITIAL_TRAINING_THRESHOLD)) {
+            initialThreshold = ((Number) encoderParams.get(METHOD_PARAMETER_LEANVEC_INITIAL_TRAINING_THRESHOLD)).intValue();
+        }
+
+        // Validate ordering: initial <= final (W-1 fix)
+        if (initialThreshold > finalThreshold) {
+            log.warn("initial_training_threshold ({}) > training_threshold ({}), swapping values",
+                initialThreshold, finalThreshold);
+            int temp = initialThreshold;
+            initialThreshold = finalThreshold;
+            finalThreshold = temp;
+        }
+        this.fieldType.putAttribute(DEFERRED_TRAINING_THRESHOLD, String.valueOf(finalThreshold));
+        this.fieldType.putAttribute(DEFERRED_TRAINING_INITIAL_THRESHOLD, String.valueOf(initialThreshold));
 
         // Get LeanVec target dimensions (default: dim/2 if not specified or 0)
         int leanvecDims = 0;

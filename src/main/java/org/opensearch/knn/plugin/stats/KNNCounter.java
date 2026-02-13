@@ -29,7 +29,13 @@ public enum KNNCounter {
     MAX_DISTANCE_QUERY_WITH_FILTER_REQUESTS("max_distance_query_with_filter_requests"),
     DEFERRED_TRAINING_REQUESTS("deferred_training_requests"),
     DEFERRED_TRAINING_SUCCESS("deferred_training_success"),
-    DEFERRED_TRAINING_ERRORS("deferred_training_errors");
+    DEFERRED_TRAINING_ERRORS("deferred_training_errors"),
+    DEFERRED_TRAINING_INITIAL_REQUESTS("deferred_training_initial_requests"),
+    DEFERRED_TRAINING_INITIAL_SUCCESS("deferred_training_initial_success"),
+    DEFERRED_TRAINING_INITIAL_ERRORS("deferred_training_initial_errors"),
+    DEFERRED_TRAINING_FINAL_REQUESTS("deferred_training_final_requests"),
+    DEFERRED_TRAINING_FINAL_SUCCESS("deferred_training_final_success"),
+    DEFERRED_TRAINING_FINAL_ERRORS("deferred_training_final_errors");
 
     private String name;
     private AtomicLong count;

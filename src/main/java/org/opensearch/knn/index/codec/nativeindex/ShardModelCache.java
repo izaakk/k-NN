@@ -17,9 +17,10 @@ import java.util.concurrent.locks.ReentrantLock;
  *
  * Provides:
  * - O(1) model lookup during flush (avoids re-reading segment files)
+ * - Atomic model+quality storage via CachedModel record (C-2 fix)
+ * - Monotonic quality upgrades: NONE→INITIAL→FINAL (C-3 fix)
+ * - Per-field per-quality circuit breaker (C-6 fix)
  * - Per-field training locks (prevents concurrent training races)
- * - Circuit breaker: after MAX_CONSECUTIVE_FAILURES consecutive training failures,
- *   further training attempts are suppressed for this field
  *
  * Lifecycle: created per-shard, cleaned up via KNNPlugin.onIndexModule() →
  * IndexEventListener.afterIndexShardClosed().
@@ -29,17 +30,55 @@ public final class ShardModelCache {
 
     private static final int MAX_CONSECUTIVE_FAILURES = 3;
 
+    /**
+     * Model quality levels for two-threshold training.
+     * Transitions are monotonic: NONE→INITIAL, NONE→FINAL, INITIAL→FINAL.
+     */
+    public enum ModelQuality {
+        NONE,     // No model trained yet
+        INITIAL,  // Rough model from initial_threshold vectors
+        FINAL;    // Production model from final_threshold vectors
+
+        /**
+         * Returns true if this quality can be upgraded to the target quality.
+         * Transitions are monotonic: NONE→INITIAL, NONE→FINAL, INITIAL→FINAL.
+         */
+        public boolean isUpgradeableTo(ModelQuality target) {
+            return this.ordinal() < target.ordinal();
+        }
+    }
+
+    /**
+     * Immutable record wrapping a model blob with its quality level.
+     * Stored as a single entry in ConcurrentHashMap for atomic reads (C-2 fix).
+     * Note: blob() exposes the internal array — use blobCopy() for external callers.
+     */
+    public record CachedModel(byte[] blob, ModelQuality quality) {
+        /**
+         * Returns a defensive copy of the blob.
+         */
+        public byte[] blobCopy() {
+            return blob.clone();
+        }
+    }
+
+    /**
+     * Composite key for per-quality failure tracking (C-6 fix).
+     * INITIAL and FINAL failures are tracked independently.
+     */
+    private record FailureKey(String fieldName, ModelQuality quality) {}
+
     /** Global registry: shardId → ShardModelCache */
     private static final ConcurrentHashMap<String, ShardModelCache> INSTANCES = new ConcurrentHashMap<>();
 
-    /** Per-field model blobs: fieldName → modelBlob */
-    private final ConcurrentHashMap<String, byte[]> models = new ConcurrentHashMap<>();
+    /** Per-field cached models: fieldName → CachedModel (atomic blob + quality) */
+    private final ConcurrentHashMap<String, CachedModel> cachedModels = new ConcurrentHashMap<>();
 
     /** Per-field training locks: fieldName → lock */
     private final ConcurrentHashMap<String, ReentrantLock> trainingLocks = new ConcurrentHashMap<>();
 
-    /** Per-field consecutive failure counts: fieldName → count */
-    private final ConcurrentHashMap<String, Integer> failureCounts = new ConcurrentHashMap<>();
+    /** Per-field per-quality consecutive failure counts */
+    private final ConcurrentHashMap<FailureKey, Integer> failureCounts = new ConcurrentHashMap<>();
 
     /** Per-field cumulative vector counts: fieldName → count (incremented on flush only, not merge) */
     private final ConcurrentHashMap<String, AtomicLong> cumulativeVectorCounts = new ConcurrentHashMap<>();
@@ -63,7 +102,7 @@ public final class ShardModelCache {
     public static void removeInstance(String shardId) {
         ShardModelCache removed = INSTANCES.remove(shardId);
         if (removed != null) {
-            removed.models.clear();
+            removed.cachedModels.clear();
             removed.trainingLocks.clear();
             removed.failureCounts.clear();
             removed.cumulativeVectorCounts.clear();
@@ -85,7 +124,7 @@ public final class ShardModelCache {
         INSTANCES.entrySet().removeIf(entry -> {
             if (entry.getKey().contains(pattern)) {
                 ShardModelCache cache = entry.getValue();
-                cache.models.clear();
+                cache.cachedModels.clear();
                 cache.trainingLocks.clear();
                 cache.failureCounts.clear();
                 cache.cumulativeVectorCounts.clear();
@@ -97,6 +136,17 @@ public final class ShardModelCache {
         });
     }
 
+    // ---- Model access ----
+
+    /**
+     * Gets the cached model entry (blob + quality) for a field.
+     * Returns null if no model is cached.
+     * The returned CachedModel is immutable; call blobCopy() for a defensive copy.
+     */
+    public CachedModel getCachedModel(String fieldName) {
+        return cachedModels.get(fieldName);
+    }
+
     /**
      * Gets a cached model blob for a field.
      * Returns a defensive copy to prevent JNI-layer mutation of the cached model (C-R3-6 fix).
@@ -105,21 +155,65 @@ public final class ShardModelCache {
      * @return a copy of the model blob, or null if not cached
      */
     public byte[] getModel(String fieldName) {
-        byte[] blob = models.get(fieldName);
-        return blob != null ? blob.clone() : null;
+        CachedModel cached = cachedModels.get(fieldName);
+        return cached != null ? cached.blobCopy() : null;
     }
 
     /**
-     * Stores a model blob in the cache.
-     * Stores a defensive copy to prevent callers from modifying the cached model (C-R3-6 fix).
+     * Gets the model quality for a field.
+     *
+     * @param fieldName the vector field name
+     * @return the model quality, or NONE if no model cached
+     */
+    public ModelQuality getModelQuality(String fieldName) {
+        CachedModel cached = cachedModels.get(fieldName);
+        return cached != null ? cached.quality() : ModelQuality.NONE;
+    }
+
+    /**
+     * Stores a model blob in the cache with quality monotonicity enforcement (C-3 fix).
+     * Rejects quality downgrades (FINAL→INITIAL, INITIAL→NONE).
+     * Uses CAS loop for thread safety without external locking.
      *
      * @param fieldName the vector field name
      * @param modelBlob the model blob bytes
+     * @param quality   the model quality level
+     * @return true if the model was stored, false if rejected (downgrade)
      */
-    public void putModel(String fieldName, byte[] modelBlob) {
-        models.put(fieldName, modelBlob.clone());
-        failureCounts.remove(fieldName);
+    public boolean putModel(String fieldName, byte[] modelBlob, ModelQuality quality) {
+        byte[] cloned = modelBlob.clone();
+        while (true) {
+            CachedModel existing = cachedModels.get(fieldName);
+            ModelQuality existingQuality = (existing != null) ? existing.quality() : ModelQuality.NONE;
+            if (!existingQuality.isUpgradeableTo(quality) && existingQuality != quality) {
+                log.warn("Rejecting model downgrade {} → {} for field '{}'", existingQuality, quality, fieldName);
+                return false;
+            }
+            CachedModel newModel = new CachedModel(cloned, quality);
+            if (existing == null) {
+                if (cachedModels.putIfAbsent(fieldName, newModel) == null) {
+                    clearFailures(fieldName, quality);
+                    return true;
+                }
+                // Lost race — retry
+            } else {
+                if (cachedModels.replace(fieldName, existing, newModel)) {
+                    clearFailures(fieldName, quality);
+                    return true;
+                }
+                // Lost race — retry
+            }
+        }
     }
+
+    /**
+     * Checks if a model exists for the given field.
+     */
+    public boolean hasModel(String fieldName) {
+        return cachedModels.containsKey(fieldName);
+    }
+
+    // ---- Training locks ----
 
     /**
      * Gets the per-field training lock.
@@ -128,28 +222,33 @@ public final class ShardModelCache {
         return trainingLocks.computeIfAbsent(fieldName, k -> new ReentrantLock());
     }
 
+    // ---- Per-quality circuit breaker (C-6 fix) ----
+
     /**
-     * Records a training failure for circuit breaker logic (W-2 fix: use merge return value).
+     * Records a training failure for a specific quality level.
      */
-    public void recordFailure(String fieldName) {
-        int count = failureCounts.merge(fieldName, 1, Integer::sum);
+    public void recordFailure(String fieldName, ModelQuality quality) {
+        FailureKey key = new FailureKey(fieldName, quality);
+        int count = failureCounts.merge(key, 1, Integer::sum);
         if (count >= MAX_CONSECUTIVE_FAILURES) {
-            log.warn("Circuit breaker: {} consecutive training failures for field {}. Suppressing further attempts.", count, fieldName);
+            log.warn("Circuit breaker: {} consecutive {} training failures for field '{}'. "
+                + "Suppressing further {} attempts.",
+                count, quality, fieldName, quality);
         }
     }
 
     /**
-     * Checks if training is suppressed by the circuit breaker.
+     * Checks if training is suppressed for a specific quality level.
      */
-    public boolean isTrainingSuppressed(String fieldName) {
-        return failureCounts.getOrDefault(fieldName, 0) >= MAX_CONSECUTIVE_FAILURES;
+    public boolean isTrainingSuppressed(String fieldName, ModelQuality quality) {
+        return failureCounts.getOrDefault(new FailureKey(fieldName, quality), 0) >= MAX_CONSECUTIVE_FAILURES;
     }
 
     /**
-     * Checks if a model exists for the given field.
+     * Clears failure count for the given quality level on successful training.
      */
-    public boolean hasModel(String fieldName) {
-        return models.containsKey(fieldName);
+    private void clearFailures(String fieldName, ModelQuality quality) {
+        failureCounts.remove(new FailureKey(fieldName, quality));
     }
 
     // ---- Cumulative vector counting (for cumulative-threshold training) ----

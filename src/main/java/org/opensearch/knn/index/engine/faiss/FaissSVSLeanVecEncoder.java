@@ -20,7 +20,9 @@ import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_PR
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_DIMENSIONS;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_INITIAL_TRAINING_THRESHOLD;
 import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_DEFAULT_THRESHOLD;
+import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD;
 
 /**
  * LeanVec (Adaptive vector quantization) encoder for SVS indexes.
@@ -53,6 +55,14 @@ public class FaissSVSLeanVecEncoder implements Encoder {
                 METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD,
                 DEFERRED_TRAINING_DEFAULT_THRESHOLD,
                 (v, context) -> v == 0 || v >= 1000  // W-9: 0=use default, otherwise must be >= 1000
+            )
+        )
+        .addParameter(
+            METHOD_PARAMETER_LEANVEC_INITIAL_TRAINING_THRESHOLD,
+            new Parameter.IntegerParameter(
+                METHOD_PARAMETER_LEANVEC_INITIAL_TRAINING_THRESHOLD,
+                DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD,
+                (v, context) -> v == 0 || v >= 1000  // 0=use default, otherwise must be >= 1000
             )
         )
         // LeanVec no longer requires explicit pre-training — deferred per-shard training

@@ -452,7 +452,10 @@ public class KNNPlugin extends Plugin
                                         byte[] model = LeanVecModelReader.readFromSegment(
                                             dir, sci, fieldInfo.name, segFieldInfo.getFieldNumber());
                                         if (model != null) {
-                                            cache.putModel(fieldInfo.name, model);
+                                            // C-5 fix: Mark recovered models as INITIAL — the upgrade
+                                            // path remains open. Next merge >= final_threshold retrains.
+                                            cache.putModel(fieldInfo.name, model,
+                                                ShardModelCache.ModelQuality.INITIAL);
                                             logger.info(
                                                 "[ShardStart] Loaded LeanVec model for field '{}' from segment '{}' (shard={})",
                                                 fieldInfo.name, sci.info.name, indexShard.shardId());

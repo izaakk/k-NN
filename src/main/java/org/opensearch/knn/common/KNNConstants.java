@@ -54,12 +54,15 @@ public class KNNConstants {
     public static final String METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS = "residual_bits";
     public static final String METHOD_PARAMETER_LEANVEC_DIMENSIONS = "dimensions";
     public static final String METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD = "training_threshold";
+    public static final String METHOD_PARAMETER_LEANVEC_INITIAL_TRAINING_THRESHOLD = "initial_training_threshold";
 
     // Deferred LeanVec training constants (per-shard model)
     public static final String DEFERRED_TRAINING_ENABLED = "deferred_training_enabled";
     public static final String DEFERRED_TRAINING_THRESHOLD = "deferred_training_threshold";
+    public static final String DEFERRED_TRAINING_INITIAL_THRESHOLD = "deferred_training_initial_threshold";
     public static final String DEFERRED_TRAINING_LEANVEC_DIMS = "deferred_training_leanvec_dims";
     public static final int DEFERRED_TRAINING_DEFAULT_THRESHOLD = 100000;
+    public static final int DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD = 10000;
     public static final String LEANVEC_MODEL_FILE_SUFFIX = "knnlvm";
     public static final String SHARD_MODEL_BLOB_PARAMETER = "shard_model_blob";
 
