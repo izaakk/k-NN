@@ -15,11 +15,8 @@ import lombok.extern.log4j.Log4j2;
 import org.apache.lucene.codecs.KnnFieldVectorsWriter;
 import org.apache.lucene.codecs.KnnVectorsWriter;
 import org.apache.lucene.codecs.hnsw.FlatVectorsWriter;
-import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.FieldInfo;
-import org.apache.lucene.index.FloatVectorValues;
 import org.apache.lucene.index.KnnVectorValues;
-import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.MergeState;
 import org.apache.lucene.index.SegmentCommitInfo;
 import org.apache.lucene.index.SegmentInfos;
@@ -94,7 +91,6 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
      * from real training failures. These must NOT trigger circuit breaker (K-R1-5 fix).
      */
     private static final byte[] TRAINING_INTERRUPTED = new byte[0];
-    private static final byte[] TRAINING_INSUFFICIENT_VECTORS = new byte[0];
 
     private final SegmentWriteState segmentWriteState;
     private final FlatVectorsWriter flatVectorsWriter;
@@ -420,13 +416,13 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
 
     /**
      * Checks if training should trigger and does so if appropriate.
-     * Returns the shard model blob (from cache, input segments, or freshly trained), or null if no model available.
+     * Returns the shard model blob (from cache or freshly trained), or null if no model available.
      *
-     * Uses cumulative vector counting across flushes to determine when training should fire.
-     * Training reads vectors from ALL committed segments via DirectoryReader to meet the SVS team's
-     * requirement that training uses at least `threshold` vectors.
+     * Uses cumulative vector counting across flushes to determine readiness.
+     * Training uses vectors from the merge itself (merge-only path).
+     * If the merge is too small, returns null (LVQ fallback — wait for a larger merge or force merge).
      *
-     * Uses ShardModelCache for per-field locks (C3 fix) and circuit breaker (C6 fix).
+     * Uses ShardModelCache for per-field locks and circuit breaker.
      */
     private byte[] maybeTriggerLeanVecTraining(
         FieldInfo fieldInfo,
@@ -444,7 +440,7 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
             return cachedModel;
         }
 
-        // 2. Seed counter on first merge after restart (O-19: explicit seeded flag, O-R1-14: CAS)
+        // 2. Seed counter on first merge after restart
         if (cache.tryMarkCounterSeeded(fieldInfo.name)) {
             seedCounterFromCommittedSegments(fieldInfo, cache);
         }
@@ -458,19 +454,27 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
             return null;
         }
 
-        // 4. Check circuit breaker — training suppressed after consecutive failures
+        // 4. Merge must have >= threshold vectors to train (merge-only path)
+        if (totalLiveDocs < threshold) {
+            log.info("[Merge] Encoding=LVQ (merge {} < threshold {}) for field '{}'. "
+                + "Waiting for larger merge or force merge. (segment={})",
+                totalLiveDocs, threshold, fieldInfo.name, segmentWriteState.segmentInfo.name);
+            return null;
+        }
+
+        // 5. Check circuit breaker — training suppressed after consecutive failures
         if (cache.isTrainingSuppressed(fieldInfo.name)) {
             log.warn("[Merge] Training suppressed by circuit breaker for field '{}' — LVQ fallback", fieldInfo.name);
             return null;
         }
 
-        // O-9: Check KNN circuit breaker before allocating off-heap memory for training
+        // Check KNN circuit breaker before allocating off-heap memory for training
         if (KNNSettings.isCircuitBreakerTriggered()) {
             log.warn("[Merge] KNN circuit breaker triggered, deferring LeanVec training for field '{}'", fieldInfo.name);
             return null;
         }
 
-        // 5. C-2: Use tryLock to avoid blocking merge threads during concurrent training
+        // 6. Acquire training lock (non-blocking, 100ms timeout)
         ReentrantLock lock = cache.getTrainingLock(fieldInfo.name);
         boolean acquired;
         try {
@@ -495,26 +499,13 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
                 return cachedModel;
             }
 
-            // O-3: If merge already has >= threshold vectors, train from merge vectors directly
-            // (force merge optimization — avoids unnecessary DirectoryReader I/O)
+            // Train from merge vectors
             KNNCounter.DEFERRED_TRAINING_REQUESTS.increment();
-            byte[] modelBlob;
-            if (totalLiveDocs >= threshold) {
-                log.info(
-                    "[Merge] TRAINING STARTED (merge-only path): field='{}', mergeVectors={}, threshold={}, segment={}",
-                    fieldInfo.name, totalLiveDocs, threshold, segmentWriteState.segmentInfo.name
-                );
-                modelBlob = trainLeanVecModel(fieldInfo, knnVectorValuesSupplier, totalLiveDocs);
-            } else {
-                log.info(
-                    "[Merge] TRAINING STARTED (DirectoryReader path): field='{}', mergeVectors={}, threshold={}, cumulativeCount={}, segment={}",
-                    fieldInfo.name, totalLiveDocs, threshold, cumulativeCount, segmentWriteState.segmentInfo.name
-                );
-                modelBlob = trainLeanVecModelFromAllSegments(fieldInfo, knnVectorValuesSupplier, totalLiveDocs);
-            }
+            log.info("[Merge] TRAINING STARTED: field='{}', mergeVectors={}, threshold={}, segment={}",
+                fieldInfo.name, totalLiveDocs, threshold, segmentWriteState.segmentInfo.name);
 
-            // K-R1-5/O-R1-18 FIX: Distinguish sentinels from real failures.
-            // Only record failure (toward circuit breaker) for actual training errors.
+            byte[] modelBlob = trainLeanVecModel(fieldInfo, knnVectorValuesSupplier, totalLiveDocs);
+
             if (modelBlob != null && modelBlob.length > 0) {
                 cache.putModel(fieldInfo.name, modelBlob);
                 KNNCounter.DEFERRED_TRAINING_SUCCESS.increment();
@@ -522,12 +513,7 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
                     fieldInfo.name, segmentWriteState.segmentInfo.name);
                 return modelBlob;
             } else if (modelBlob == TRAINING_INTERRUPTED) {
-                // Transient condition — don't count as failure
                 log.info("[Merge] Training interrupted (not a failure) for field '{}', using LVQ fallback", fieldInfo.name);
-                return null;
-            } else if (modelBlob == TRAINING_INSUFFICIENT_VECTORS) {
-                // Expected condition with sparse fields — don't count as failure
-                log.info("[Merge] Insufficient vectors for training field '{}', using LVQ fallback", fieldInfo.name);
                 return null;
             } else {
                 // Real failure (null return from training)
@@ -685,189 +671,6 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
                 infos.size(), totalVectors, fieldInfo.name);
         } catch (IOException e) {
             log.warn("[Merge] Failed to seed counter from committed segments for field '{}': {}", fieldInfo.name, e.getMessage());
-        }
-    }
-
-    /**
-     * Trains a LeanVec model using vectors from ALL committed segments via DirectoryReader.
-     * This satisfies the SVS team's requirement that training must use at least `threshold` vectors.
-     *
-     * L-R1-19 fix: Streams vectors directly to OffHeapFloatVectorTransfer instead of collecting
-     * all into a heap ArrayList. Keeps K-7 separation by catching DirectoryReader errors separately
-     * from JNI errors — if DirectoryReader fails, we discard the partial off-heap transfer and
-     * fall back to merge vectors.
-     *
-     * Falls back to merge-only vectors if DirectoryReader.open() fails.
-     *
-     * Returns TRAINING_INTERRUPTED sentinel on thread interruption, or TRAINING_INSUFFICIENT_VECTORS
-     * when not enough vectors available. Caller must distinguish from real failures (K-R1-5 fix).
-     */
-    private byte[] trainLeanVecModelFromAllSegments(
-        FieldInfo fieldInfo,
-        Supplier<KNNVectorValues<?>> mergeVectorsFallback,
-        int mergeVectorCount
-    ) throws IOException {
-        int dimension = getDimension(fieldInfo);
-        int leanvecDims = getLeanVecDimensions(fieldInfo);
-        if (dimension <= 0 || leanvecDims <= 0) {
-            log.warn("Cannot train LeanVec: invalid dimensions (dim={}, leanvecDims={})", dimension, leanvecDims);
-            return null;
-        }
-
-        int threshold = getTrainingThreshold(fieldInfo);
-        int trainingCount = Math.min(threshold, MAX_TRAINING_VECTORS);
-
-        // C-6: Use FilterDirectory.unwrap() static method (safe on Linux, inode semantics)
-        Directory rawDir = FilterDirectory.unwrap(segmentWriteState.directory);
-
-        StopWatch stopWatch = new StopWatch().start();
-        boolean stopped = false;
-        try {
-            // Build training parameters (K-6: all 4 required params)
-            String indexDescription = getIndexDescriptionFromFieldInfo(fieldInfo);
-            Map<String, Object> trainParameters = new HashMap<>();
-            trainParameters.put(INDEX_DESCRIPTION_PARAMETER, indexDescription);
-            trainParameters.put(SPACE_TYPE, fieldInfo.attributes().getOrDefault(SPACE_TYPE, "l2"));
-            trainParameters.put(INDEX_THREAD_QTY, KNNSettings.getIndexThreadQty());
-            trainParameters.put(VECTOR_DATA_TYPE_FIELD, VectorDataType.FLOAT.getValue());
-
-            int bytesPerVector = dimension * Float.BYTES;
-            boolean directoryReaderFailed = false;
-            int transferred = 0;
-
-            // L-R1-19 FIX: Stream vectors directly to off-heap. If DirectoryReader fails,
-            // close the transfer and re-create for fallback path.
-            try (OffHeapFloatVectorTransfer vectorTransfer = new OffHeapFloatVectorTransfer(bytesPerVector, trainingCount)) {
-                try (DirectoryReader reader = DirectoryReader.open(rawDir)) {
-                    // Count total available vectors for uniform sampling
-                    int totalAvailable = 0;
-                    for (LeafReaderContext leafCtx : reader.leaves()) {
-                        FloatVectorValues fvv = leafCtx.reader().getFloatVectorValues(fieldInfo.name);
-                        if (fvv != null) totalAvailable += fvv.size();
-                    }
-
-                    // R-2 FIX: Ceiling division for unbiased sampling
-                    int sampleStep = Math.max(1, (totalAvailable + trainingCount - 1) / trainingCount);
-
-                    log.info("[Merge] DirectoryReader opened: {} total vectors across {} segments for field '{}', sampleStep={}",
-                        totalAvailable, reader.leaves().size(), fieldInfo.name, sampleStep);
-
-                    int globalIdx = 0;
-                    outer:
-                    for (LeafReaderContext leafCtx : reader.leaves()) {
-                        if (transferred >= trainingCount) break;
-
-                        FloatVectorValues fvv = leafCtx.reader().getFloatVectorValues(fieldInfo.name);
-                        if (fvv == null) continue;
-
-                        KnnVectorValues.DocIndexIterator iter = fvv.iterator();
-                        while (iter.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
-                            // M-5/K-14 FIX: Thread interruption check
-                            if (Thread.currentThread().isInterrupted()) {
-                                log.warn("[Merge] Training interrupted during DirectoryReader iteration for field '{}'", fieldInfo.name);
-                                return TRAINING_INTERRUPTED;
-                            }
-                            if (transferred >= trainingCount) break outer;
-                            if (globalIdx % sampleStep == 0) {
-                                // Stream directly to off-heap — vectorValue() buffer is consumed by transfer
-                                vectorTransfer.transfer(fvv.vectorValue(iter.index()).clone(), true);
-                                transferred++;
-                            }
-                            globalIdx++;
-                        }
-                    }
-                    log.info("[Merge] DirectoryReader streamed {} vectors from {} available for field '{}'",
-                        transferred, totalAvailable, fieldInfo.name);
-                } catch (IOException e) {
-                    // K-7: DirectoryReader I/O error is separate from JNI errors
-                    log.warn("[Merge] DirectoryReader failed for field '{}': {}", fieldInfo.name, e.getMessage(), e);
-                    directoryReaderFailed = true;
-                    transferred = 0;  // Discard partial off-heap data
-                }
-
-                // Phase 2: If DirectoryReader failed, fall back to merge vectors
-                if (directoryReaderFailed && mergeVectorsFallback != null) {
-                    // Re-create transfer (old one has partial data we can't use)
-                    try (OffHeapFloatVectorTransfer fallbackTransfer = new OffHeapFloatVectorTransfer(bytesPerVector, trainingCount)) {
-                        KNNVectorValues<?> mergeVectors = mergeVectorsFallback.get();
-                        mergeVectors.nextDoc();
-                        while (mergeVectors.docId() != DocIdSetIterator.NO_MORE_DOCS
-                               && transferred < trainingCount) {
-                            // M-6/K-R1-6 FIX: Clone in fallback path
-                            fallbackTransfer.transfer(((float[]) mergeVectors.getVector()).clone(), true);
-                            transferred++;
-                            mergeVectors.nextDoc();
-                        }
-                        log.info("[Merge] Fallback: streamed {} vectors from merge for field '{}'",
-                            transferred, fieldInfo.name);
-
-                        // K-R1-18 FIX: Use trainingCount (not raw threshold) for sufficiency check
-                        if (transferred < trainingCount) {
-                            log.warn("[Merge] Only collected {} vectors, need {} for training. Deferring for field '{}'.",
-                                transferred, trainingCount, fieldInfo.name);
-                            return TRAINING_INSUFFICIENT_VECTORS;
-                        }
-
-                        fallbackTransfer.flush(true);
-                        long vectorAddress = fallbackTransfer.getVectorAddress();
-
-                        // M-3/K-8 FIX: AccessController.doPrivileged() around JNI call
-                        byte[] modelBlob = AccessController.doPrivileged((PrivilegedAction<byte[]>) () -> {
-                            return JNIService.trainIndex(trainParameters, dimension, vectorAddress, KNNEngine.FAISS);
-                        });
-
-                        if (modelBlob == null || modelBlob.length == 0) {
-                            log.error("[Merge] LeanVec training produced empty model blob for field '{}'", fieldInfo.name);
-                            return null;
-                        }
-
-                        long timeMs = stopWatch.stop().totalTime().millis();
-                        stopped = true;
-                        log.info(
-                            "[Merge] LeanVec fallback training complete for field '{}' ({} vectors, {}ms, blob={}KB)",
-                            fieldInfo.name, transferred, timeMs, modelBlob.length / 1024
-                        );
-                        return modelBlob;
-                    }
-                }
-
-                // K-R1-18 FIX: Use trainingCount (not raw threshold) for sufficiency check
-                if (transferred < trainingCount) {
-                    log.warn("[Merge] Only streamed {} vectors, need {} for training. Deferring for field '{}'.",
-                        transferred, trainingCount, fieldInfo.name);
-                    return TRAINING_INSUFFICIENT_VECTORS;
-                }
-
-                vectorTransfer.flush(true);
-                long vectorAddress = vectorTransfer.getVectorAddress();
-
-                // M-3/K-8 FIX: AccessController.doPrivileged() around JNI call
-                byte[] modelBlob = AccessController.doPrivileged((PrivilegedAction<byte[]>) () -> {
-                    return JNIService.trainIndex(trainParameters, dimension, vectorAddress, KNNEngine.FAISS);
-                });
-
-                if (modelBlob == null || modelBlob.length == 0) {
-                    log.error("[Merge] LeanVec training produced empty model blob for field '{}'", fieldInfo.name);
-                    return null;
-                }
-
-                long timeMs = stopWatch.stop().totalTime().millis();
-                stopped = true;
-                log.info(
-                    "[Merge] LeanVec DirectoryReader training complete for field '{}' ({} vectors, {}ms, blob={}KB)",
-                    fieldInfo.name, transferred, timeMs, modelBlob.length / 1024
-                );
-
-                return modelBlob;
-            }
-        } catch (IOException | IllegalStateException | IllegalArgumentException e) {
-            log.error("[Merge] Failed to train LeanVec model (DirectoryReader path) for field '{}': {}",
-                fieldInfo.name, e.getMessage(), e);
-            return null;
-        } finally {
-            if (!stopped) {
-                try { stopWatch.stop(); } catch (IllegalStateException ignored) { }
-            }
         }
     }
 
