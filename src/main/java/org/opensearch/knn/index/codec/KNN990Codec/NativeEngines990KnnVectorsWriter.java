@@ -179,11 +179,12 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
             if (isDeferredLeanVecEnabled(fieldInfo)) {
                 String shardId = getShardId();
                 ShardModelCache cache = ShardModelCache.getInstance(shardId);
-                shardModelBlob = cache.getModel(fieldInfo.name);
-                if (shardModelBlob != null) {
-                    ShardModelCache.ModelQuality quality = cache.getModelQuality(fieldInfo.name);
+                // Single atomic read of blob+quality to avoid race between getModel/getModelQuality (W-10 fix)
+                ShardModelCache.CachedModel cached = cache.getCachedModel(fieldInfo.name);
+                if (cached != null) {
+                    shardModelBlob = cached.blobCopy();
                     log.info("[Flush] Encoding=LeanVec ({} model) for field '{}' ({} vectors, segment={})",
-                        quality, fieldInfo.name, totalLiveDocs, segmentWriteState.segmentInfo.name);
+                        cached.quality(), fieldInfo.name, totalLiveDocs, segmentWriteState.segmentInfo.name);
                 } else {
                     log.info("[Flush] Encoding=LVQ (no trained model) for field '{}' ({} vectors, segment={})",
                         fieldInfo.name, totalLiveDocs, segmentWriteState.segmentInfo.name);
@@ -621,6 +622,7 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
                 }
                 return modelBlob;
             } else if (modelBlob == TRAINING_INTERRUPTED) {
+                KNNCounter.DEFERRED_TRAINING_INTERRUPTED.increment();
                 log.info("[Merge] Training interrupted for field '{}', using fallback ({}ms)",
                     fieldInfo.name, trainingMs);
                 // Return existing model if we have one (INITIAL), else null (LVQ)

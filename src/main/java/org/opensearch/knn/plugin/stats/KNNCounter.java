@@ -35,7 +35,9 @@ public enum KNNCounter {
     DEFERRED_TRAINING_INITIAL_ERRORS("deferred_training_initial_errors"),
     DEFERRED_TRAINING_FINAL_REQUESTS("deferred_training_final_requests"),
     DEFERRED_TRAINING_FINAL_SUCCESS("deferred_training_final_success"),
-    DEFERRED_TRAINING_FINAL_ERRORS("deferred_training_final_errors");
+    DEFERRED_TRAINING_FINAL_ERRORS("deferred_training_final_errors"),
+    DEFERRED_TRAINING_INTERRUPTED("deferred_training_interrupted"),
+    DEFERRED_TRAINING_MODEL_RECOVERIES("deferred_training_model_recoveries");
 
     private String name;
     private AtomicLong count;

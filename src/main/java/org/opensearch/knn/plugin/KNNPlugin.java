@@ -65,6 +65,7 @@ import org.opensearch.knn.plugin.rest.RestSearchModelHandler;
 import org.opensearch.knn.plugin.rest.RestTrainModelHandler;
 import org.opensearch.knn.plugin.script.KNNScoringScriptEngine;
 import org.opensearch.knn.plugin.search.KNNConcurrentSearchRequestDecider;
+import org.opensearch.knn.plugin.stats.KNNCounter;
 import org.opensearch.knn.plugin.stats.KNNStats;
 import org.opensearch.knn.plugin.transport.ClearCacheAction;
 import org.opensearch.knn.plugin.transport.ClearCacheTransportAction;
@@ -456,6 +457,7 @@ public class KNNPlugin extends Plugin
                                             // path remains open. Next merge >= final_threshold retrains.
                                             cache.putModel(fieldInfo.name, model,
                                                 ShardModelCache.ModelQuality.INITIAL);
+                                            KNNCounter.DEFERRED_TRAINING_MODEL_RECOVERIES.increment();
                                             logger.info(
                                                 "[ShardStart] Loaded LeanVec model for field '{}' from segment '{}' (shard={})",
                                                 fieldInfo.name, sci.info.name, indexShard.shardId());

@@ -192,13 +192,13 @@ public final class ShardModelCache {
             CachedModel newModel = new CachedModel(cloned, quality);
             if (existing == null) {
                 if (cachedModels.putIfAbsent(fieldName, newModel) == null) {
-                    clearFailures(fieldName, quality);
+                    clearFailuresOnSuccess(fieldName, quality);
                     return true;
                 }
                 // Lost race — retry
             } else {
                 if (cachedModels.replace(fieldName, existing, newModel)) {
-                    clearFailures(fieldName, quality);
+                    clearFailuresOnSuccess(fieldName, quality);
                     return true;
                 }
                 // Lost race — retry
@@ -245,10 +245,15 @@ public final class ShardModelCache {
     }
 
     /**
-     * Clears failure count for the given quality level on successful training.
+     * Clears failure counts on successful training. Clears both the stored quality's
+     * failures and any lower-quality failures (W-5 fix: storing FINAL clears stale INITIAL failures).
      */
-    private void clearFailures(String fieldName, ModelQuality quality) {
+    private void clearFailuresOnSuccess(String fieldName, ModelQuality quality) {
         failureCounts.remove(new FailureKey(fieldName, quality));
+        // When upgrading to FINAL, also clear stale INITIAL failures
+        if (quality == ModelQuality.FINAL) {
+            failureCounts.remove(new FailureKey(fieldName, ModelQuality.INITIAL));
+        }
     }
 
     // ---- Cumulative vector counting (for cumulative-threshold training) ----
