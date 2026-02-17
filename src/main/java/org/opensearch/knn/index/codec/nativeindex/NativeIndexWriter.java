@@ -5,7 +5,6 @@
 
 package org.opensearch.knn.index.codec.nativeindex;
 
-import lombok.AllArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.apache.lucene.codecs.CodecUtil;
 import org.apache.lucene.index.FieldInfo;
@@ -42,16 +41,23 @@ import java.util.function.Supplier;
 import static org.apache.lucene.search.DocIdSetIterator.NO_MORE_DOCS;
 import static org.opensearch.knn.common.FieldInfoExtractor.extractKNNEngine;
 import static org.opensearch.knn.common.FieldInfoExtractor.extractVectorDataType;
+import static org.opensearch.knn.common.FieldInfoExtractor.isDeferredLeanVecEnabled;
+import static org.opensearch.knn.common.KNNConstants.INDEX_DESCRIPTION_PARAMETER;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD;
 import static org.opensearch.knn.common.KNNConstants.MODEL_ID;
+import static org.opensearch.knn.common.KNNConstants.SHARD_MODEL_BLOB_PARAMETER;
 import static org.opensearch.knn.common.KNNConstants.PARAMETERS;
 import static org.opensearch.knn.index.codec.util.KNNCodecUtil.buildEngineFileName;
 import static org.opensearch.knn.index.codec.util.KNNCodecUtil.initializeVectorValues;
 import static org.opensearch.knn.index.engine.faiss.Faiss.FAISS_BINARY_INDEX_DESCRIPTION_PREFIX;
 
 /**
- * Writes KNN Index for a field in a segment. This is intended to be used for native engines
+ * Writes KNN Index for a field in a segment. This is intended to be used for native engines.
+ *
+ * Supports deferred LeanVec training: when a shard model blob is provided, it routes to the
+ * template (DefaultIndexBuildStrategy) path. When no model is available for a deferred-training
+ * field, it swaps the index_description to use a LVQ fallback encoding.
  */
-@AllArgsConstructor
 @Log4j2
 public class NativeIndexWriter {
     private static final Long CRC32_CHECKSUM_SANITY = 0xFFFFFFFF00000000L;
@@ -61,30 +67,35 @@ public class NativeIndexWriter {
     private final NativeIndexBuildStrategyFactory indexBuilderFactory;
     @Nullable
     private final QuantizationState quantizationState;
+    @Nullable
+    private final byte[] shardModelBlob;
 
     /**
-     * Gets the correct writer type from fieldInfo
-     *
-     * @param fieldInfo
-     * @return correct NativeIndexWriter to make index specified in fieldInfo
+     * Full constructor with all parameters including shard model blob for deferred training.
      */
-    public static NativeIndexWriter getWriter(final FieldInfo fieldInfo, SegmentWriteState state) {
-        return createWriter(fieldInfo, state, null, new NativeIndexBuildStrategyFactory());
+    NativeIndexWriter(
+        SegmentWriteState state,
+        FieldInfo fieldInfo,
+        NativeIndexBuildStrategyFactory indexBuilderFactory,
+        @Nullable QuantizationState quantizationState,
+        @Nullable byte[] shardModelBlob
+    ) {
+        this.state = state;
+        this.fieldInfo = fieldInfo;
+        this.indexBuilderFactory = indexBuilderFactory;
+        this.quantizationState = quantizationState;
+        this.shardModelBlob = shardModelBlob;
     }
 
     /**
-     * Gets the correct writer type for the specified field, using a given QuantizationModel.
-     *
-     * This method returns a NativeIndexWriter instance that is tailored to the specific characteristics
-     * of the field described by the provided FieldInfo. It determines whether to use a template-based
-     * writer or an iterative approach based on the engine type and whether the field is associated with a template.
-     *
-     * If quantization is required, the QuantizationModel is passed to the writer to facilitate the quantization process.
-     *
-     * @param fieldInfo          The FieldInfo object containing metadata about the field for which the writer is needed.
-     * @param state              The SegmentWriteState representing the current segment's writing context.
-     * @param quantizationState  The QuantizationState that contains  quantization state required for quantization
-     * @return                   A NativeIndexWriter instance appropriate for the specified field, configured with or without quantization.
+     * Gets the correct writer type from fieldInfo (no quantization, no shard model)
+     */
+    public static NativeIndexWriter getWriter(final FieldInfo fieldInfo, SegmentWriteState state) {
+        return createWriter(fieldInfo, state, null, new NativeIndexBuildStrategyFactory(), null);
+    }
+
+    /**
+     * Gets the correct writer type with quantization state (no shard model).
      */
     public static NativeIndexWriter getWriter(
         final FieldInfo fieldInfo,
@@ -92,14 +103,24 @@ public class NativeIndexWriter {
         final QuantizationState quantizationState,
         final NativeIndexBuildStrategyFactory nativeIndexBuildStrategyFactory
     ) {
-        return createWriter(fieldInfo, state, quantizationState, nativeIndexBuildStrategyFactory);
+        return createWriter(fieldInfo, state, quantizationState, nativeIndexBuildStrategyFactory, null);
+    }
+
+    /**
+     * Gets the correct writer type with quantization state and shard model blob for deferred training.
+     */
+    public static NativeIndexWriter getWriter(
+        final FieldInfo fieldInfo,
+        final SegmentWriteState state,
+        final QuantizationState quantizationState,
+        final NativeIndexBuildStrategyFactory nativeIndexBuildStrategyFactory,
+        @Nullable final byte[] shardModelBlob
+    ) {
+        return createWriter(fieldInfo, state, quantizationState, nativeIndexBuildStrategyFactory, shardModelBlob);
     }
 
     /**
      * flushes the index
-     *
-     * @param knnVectorValuesSupplier
-     * @throws IOException
      */
     public void flushIndex(final Supplier<KNNVectorValues<?>> knnVectorValuesSupplier, int totalLiveDocs) throws IOException {
         buildAndWriteIndex(knnVectorValuesSupplier, totalLiveDocs, true);
@@ -108,14 +129,11 @@ public class NativeIndexWriter {
 
     /**
      * Merges kNN index
-     * @param knnVectorValuesSupplier
-     * @throws IOException
      */
     public void mergeIndex(final Supplier<KNNVectorValues<?>> knnVectorValuesSupplier, int totalLiveDocs) throws IOException {
         KNNVectorValues<?> knnVectorValues = knnVectorValuesSupplier.get();
         initializeVectorValues(knnVectorValues);
         if (knnVectorValues.docId() == NO_MORE_DOCS) {
-            // This is in place so we do not add metrics
             log.debug("Skipping mergeIndex, vector values are already iterated for {}", fieldInfo.name);
             return;
         }
@@ -175,14 +193,23 @@ public class NativeIndexWriter {
         final Map<String, Object> parameters;
         VectorDataType vectorDataType;
         if (quantizationState != null) {
-            vectorDataType = QuantizationService.getInstance().getVectorDataTypeForTransfer(fieldInfo, state.segmentInfo.getVersion());
+            vectorDataType = QuantizationService.getInstance().getVectorDataTypeForTransfer(fieldInfo);
         } else {
             vectorDataType = extractVectorDataType(fieldInfo);
         }
+
         if (fieldInfo.attributes().containsKey(MODEL_ID)) {
+            // Standard model-based path (explicit model_id in mapping)
             Model model = getModel(fieldInfo);
             parameters = getTemplateParameters(fieldInfo, model);
+        } else if (shardModelBlob != null) {
+            // Deferred training: shard model available — use template path
+            parameters = getShardModelParameters(fieldInfo);
+        } else if (isDeferredLeanVecEnabled(fieldInfo)) {
+            // Deferred training: no model yet — use LVQ fallback
+            parameters = getDeferredTrainingFallbackParameters(fieldInfo, vectorDataType, knnEngine);
         } else {
+            // Standard non-model path
             parameters = getParameters(fieldInfo, vectorDataType, knnEngine);
         }
 
@@ -221,12 +248,13 @@ public class NativeIndexWriter {
             }
             parameters.put(PARAMETERS, algoParams);
         } else {
+            // Use explicit JSON media type, not runtime-dependent default
             parameters.putAll(
                 XContentHelper.createParser(
                     NamedXContentRegistry.EMPTY,
                     DeprecationHandler.THROW_UNSUPPORTED_OPERATION,
                     new BytesArray(parametersString),
-                    MediaTypeRegistry.getDefaultMediaType()
+                    MediaTypeRegistry.JSON
                 ).map()
             );
         }
@@ -274,13 +302,106 @@ public class NativeIndexWriter {
         parameters.put(KNNConstants.INDEX_THREAD_QTY, KNNSettings.getIndexThreadQty());
         parameters.put(KNNConstants.MODEL_ID, fieldInfo.attributes().get(MODEL_ID));
         parameters.put(KNNConstants.MODEL_BLOB_PARAMETER, model.getModelBlob());
-        if (FieldInfoExtractor.extractQuantizationConfig(fieldInfo, state.segmentInfo.getVersion()) != QuantizationConfig.EMPTY) {
+        if (FieldInfoExtractor.extractQuantizationConfig(fieldInfo) != QuantizationConfig.EMPTY) {
             IndexUtil.updateVectorDataTypeToParameters(parameters, VectorDataType.BINARY);
         } else {
             IndexUtil.updateVectorDataTypeToParameters(parameters, model.getModelMetadata().getVectorDataType());
         }
 
         return parameters;
+    }
+
+    /**
+     * Builds parameters using the shard model blob (deferred training, post-training).
+     * Uses SHARD_MODEL_BLOB_PARAMETER (not MODEL_ID) to avoid polluting the model registry namespace.
+     */
+    private Map<String, Object> getShardModelParameters(FieldInfo fieldInfo) {
+        Map<String, Object> parameters = new HashMap<>();
+        parameters.put(KNNConstants.INDEX_THREAD_QTY, KNNSettings.getIndexThreadQty());
+        parameters.put(SHARD_MODEL_BLOB_PARAMETER, shardModelBlob);
+        // Include space_type so FAISS can configure the correct distance metric
+        parameters.put(KNNConstants.SPACE_TYPE, fieldInfo.attributes().getOrDefault(KNNConstants.SPACE_TYPE, SpaceType.DEFAULT.getValue()));
+        IndexUtil.updateVectorDataTypeToParameters(parameters, VectorDataType.FLOAT);
+        return parameters;
+    }
+
+    /**
+     * Builds parameters for pre-training fallback (deferred training, before model exists).
+     * Swaps the LeanVec index_description to a LVQ fallback so the iterative build path can succeed
+     * without training.
+     *
+     * Parsing is structured: split on comma, find the LeanVec component, replace with LVQ equivalent.
+     * Throws IllegalStateException if index_description is missing or has no LeanVec component.
+     */
+    private Map<String, Object> getDeferredTrainingFallbackParameters(
+        FieldInfo fieldInfo,
+        VectorDataType vectorDataType,
+        KNNEngine knnEngine
+    ) throws IOException {
+        Map<String, Object> parameters = getParameters(fieldInfo, vectorDataType, knnEngine);
+
+        Object indexDesc = parameters.get(INDEX_DESCRIPTION_PARAMETER);
+        if (indexDesc == null) {
+            throw new IllegalStateException(
+                "Deferred LeanVec training enabled but no index_description found for field " + fieldInfo.name
+            );
+        }
+
+        String desc = indexDesc.toString();
+        // Structured parse: split on comma, find the LeanVec component, replace with LVQ
+        // Example: "SVSVamana64,LeanVec4x4_192" -> components ["SVSVamana64", "LeanVec4x4_192"]
+        String[] components = desc.split(",");
+        boolean found = false;
+        for (int i = 0; i < components.length; i++) {
+            String comp = components[i].trim();
+            if (comp.startsWith("LeanVec")) {
+                // Extract quantization bits: "LeanVec4x4_192" -> "4x4"
+                String remainder = comp.substring("LeanVec".length());
+                int underscoreIdx = remainder.indexOf('_');
+                String bits = underscoreIdx >= 0 ? remainder.substring(0, underscoreIdx) : remainder;
+                components[i] = "LVQ" + bits;
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            throw new IllegalStateException(
+                "Deferred LeanVec training enabled but index_description has no LeanVec component: " + desc
+            );
+        }
+
+        String fallbackDesc = String.join(",", components);
+        parameters.put(INDEX_DESCRIPTION_PARAMETER, fallbackDesc);
+        log.debug("Deferred training fallback: swapped index_description from '{}' to '{}'", desc, fallbackDesc);
+
+        // Remove training_threshold from nested encoder parameters before passing to JNI.
+        // training_threshold is a codec-layer parameter with no meaning to FAISS/SVS.
+        removeLeanVecTrainingThreshold(parameters);
+
+        return parameters;
+    }
+
+    /**
+     * Removes training_threshold from the nested encoder parameters.
+     * training_threshold is a codec-layer parameter that leaks through MethodComponent's
+     * getParameterMapWithDefaultsAdded() into the FAISS parameters JSON. It has no meaning
+     * to FAISS/SVS and may cause JNI errors if the native layer rejects unknown parameters.
+     */
+    @SuppressWarnings("unchecked")
+    private static void removeLeanVecTrainingThreshold(Map<String, Object> parameters) {
+        Object subParamsObj = parameters.get(PARAMETERS);
+        if (subParamsObj instanceof Map) {
+            Map<String, Object> subParams = (Map<String, Object>) subParamsObj;
+            Object encoderObj = subParams.get("encoder");
+            if (encoderObj instanceof Map) {
+                Map<String, Object> encoder = (Map<String, Object>) encoderObj;
+                Object encoderParamsObj = encoder.get("parameters");
+                if (encoderParamsObj instanceof Map) {
+                    ((Map<String, Object>) encoderParamsObj).remove(METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD);
+                }
+            }
+        }
     }
 
     private Model getModel(FieldInfo fieldInfo) {
@@ -313,19 +434,14 @@ public class NativeIndexWriter {
 
     /**
      * Helper method to create the appropriate NativeIndexWriter based on the field info and quantization state.
-     *
-     * @param fieldInfo          The FieldInfo object containing metadata about the field for which the writer is needed.
-     * @param state              The SegmentWriteState representing the current segment's writing context.
-     * @param quantizationState  The QuantizationState that contains quantization state required for quantization, can be null.
-     * @param nativeIndexBuildStrategyFactory The factory which will return the correct {@link NativeIndexBuildStrategy} implementation
-     * @return                   A NativeIndexWriter instance appropriate for the specified field, configured with or without quantization.
      */
     private static NativeIndexWriter createWriter(
         final FieldInfo fieldInfo,
         final SegmentWriteState state,
         @Nullable final QuantizationState quantizationState,
-        NativeIndexBuildStrategyFactory nativeIndexBuildStrategyFactory
+        NativeIndexBuildStrategyFactory nativeIndexBuildStrategyFactory,
+        @Nullable final byte[] shardModelBlob
     ) {
-        return new NativeIndexWriter(state, fieldInfo, nativeIndexBuildStrategyFactory, quantizationState);
+        return new NativeIndexWriter(state, fieldInfo, nativeIndexBuildStrategyFactory, quantizationState, shardModelBlob);
     }
 }

@@ -175,6 +175,17 @@ public class KNNStats {
             .put(StatNames.MODEL_INDEX_STATUS.getName(), createClusterStat(new ModelIndexStatusSupplier<>(ModelDao::getHealthStatus)))
             .put(StatNames.TRAINING_REQUESTS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.TRAINING_REQUESTS)))
             .put(StatNames.TRAINING_ERRORS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.TRAINING_ERRORS)))
+            .put(StatNames.DEFERRED_TRAINING_REQUESTS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.DEFERRED_TRAINING_REQUESTS)))
+            .put(StatNames.DEFERRED_TRAINING_SUCCESS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.DEFERRED_TRAINING_SUCCESS)))
+            .put(StatNames.DEFERRED_TRAINING_ERRORS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.DEFERRED_TRAINING_ERRORS)))
+            .put(StatNames.DEFERRED_TRAINING_INITIAL_REQUESTS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.DEFERRED_TRAINING_INITIAL_REQUESTS)))
+            .put(StatNames.DEFERRED_TRAINING_INITIAL_SUCCESS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.DEFERRED_TRAINING_INITIAL_SUCCESS)))
+            .put(StatNames.DEFERRED_TRAINING_INITIAL_ERRORS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.DEFERRED_TRAINING_INITIAL_ERRORS)))
+            .put(StatNames.DEFERRED_TRAINING_FINAL_REQUESTS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.DEFERRED_TRAINING_FINAL_REQUESTS)))
+            .put(StatNames.DEFERRED_TRAINING_FINAL_SUCCESS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.DEFERRED_TRAINING_FINAL_SUCCESS)))
+            .put(StatNames.DEFERRED_TRAINING_FINAL_ERRORS.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.DEFERRED_TRAINING_FINAL_ERRORS)))
+            .put(StatNames.DEFERRED_TRAINING_INTERRUPTED.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.DEFERRED_TRAINING_INTERRUPTED)))
+            .put(StatNames.DEFERRED_TRAINING_MODEL_RECOVERIES.getName(), createNodeStat(new KNNCounterSupplier(KNNCounter.DEFERRED_TRAINING_MODEL_RECOVERIES)))
             .put(
                 StatNames.TRAINING_MEMORY_USAGE.getName(),
                 createNodeStat(new NativeMemoryCacheManagerSupplier<>(NativeMemoryCacheManager::getTrainingSizeInKilobytes))

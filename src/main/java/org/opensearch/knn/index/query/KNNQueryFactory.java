@@ -44,6 +44,7 @@ public class KNNQueryFactory extends BaseQueryFactory {
         final String fieldName = createQueryRequest.getFieldName();
         final int k = createQueryRequest.getK();
         final float[] vector = createQueryRequest.getVector();
+        final float[] originalVector = createQueryRequest.getOriginalVector();
         final byte[] byteVector = createQueryRequest.getByteVector();
         final VectorDataType vectorDataType = createQueryRequest.getVectorDataType();
         final Query filterQuery = getFilterQuery(createQueryRequest);
@@ -83,7 +84,7 @@ public class KNNQueryFactory extends BaseQueryFactory {
                 methodParameters
             );
 
-            KNNQuery knnQuery = null;
+            final KNNQuery knnQuery;
             switch (vectorDataType) {
                 case BINARY:
                     knnQuery = KNNQuery.builder()
@@ -104,6 +105,7 @@ public class KNNQueryFactory extends BaseQueryFactory {
                     knnQuery = KNNQuery.builder()
                         .field(fieldName)
                         .queryVector(vector)
+                        .originalQueryVector(originalVector)
                         .byteQueryVector(byteVector)
                         .indexName(indexName)
                         .parentsFilter(parentFilter)
@@ -117,7 +119,8 @@ public class KNNQueryFactory extends BaseQueryFactory {
                         .build();
             }
 
-            if (createQueryRequest.getRescoreContext().isPresent()
+            if (memoryOptimizedSearchEnabled
+                || createQueryRequest.getRescoreContext().isPresent()
                 || (ENGINES_SUPPORTING_NESTED_FIELDS.contains(createQueryRequest.getKnnEngine()) && expandNested)) {
                 return new NativeEngineKnnVectorQuery(knnQuery, QueryUtils.getInstance(), expandNested);
             }

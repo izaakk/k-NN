@@ -39,15 +39,7 @@ final class DefaultIndexBuildStrategy implements NativeIndexBuildStrategy {
     }
 
     /**
-     * Builds and writes a k-NN index using the provided vector values and index parameters. This method handles both
-     * quantized and non-quantized vectors, transferring them off-heap before building the index using native JNI services.
-     *
-     * <p>The method first iterates over the vector values to calculate the necessary bytes per vector. If quantization is
-     * enabled, the vectors are quantized before being transferred off-heap. Once all vectors are transferred, they are
-     * flushed and used to build the index. The index is then written to the specified path using JNI calls.</p>
-     *
-     * @param indexInfo        The {@link BuildIndexParams} containing the parameters and configuration for building the index.
-     * @throws IOException     If an I/O error occurs during the process of building and writing the index.
+     * {@inheritDoc}
      */
     public void buildAndWriteIndex(final BuildIndexParams indexInfo) throws IOException {
         final KNNVectorValues<?> knnVectorValues = indexInfo.getKnnVectorValuesSupplier().get();
@@ -75,16 +67,18 @@ final class DefaultIndexBuildStrategy implements NativeIndexBuildStrategy {
 
             final Map<String, Object> params = indexInfo.getParameters();
             long vectorAddress = vectorTransfer.getVectorAddress();
-            // Currently this is if else as there are only two cases, with more cases this will have to be made
-            // more maintainable
-            if (params.containsKey(MODEL_ID)) {
+            // Template-based path: either explicit MODEL_ID or deferred training shard model blob
+            if (params.containsKey(MODEL_ID) || params.containsKey(KNNConstants.SHARD_MODEL_BLOB_PARAMETER)) {
+                final byte[] templateBlob = params.containsKey(KNNConstants.SHARD_MODEL_BLOB_PARAMETER)
+                    ? (byte[]) params.get(KNNConstants.SHARD_MODEL_BLOB_PARAMETER)
+                    : (byte[]) params.get(KNNConstants.MODEL_BLOB_PARAMETER);
                 AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
                     JNIService.createIndexFromTemplate(
                         intListToArray(transferredDocIds),
                         vectorAddress,
                         indexBuildSetup.getDimensions(),
                         indexInfo.getIndexOutputWithBuffer(),
-                        (byte[]) params.get(KNNConstants.MODEL_BLOB_PARAMETER),
+                        templateBlob,
                         params,
                         indexInfo.getKnnEngine()
                     );

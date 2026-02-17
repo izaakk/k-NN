@@ -10,7 +10,6 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.LeafReader;
 import org.apache.lucene.index.VectorEncoding;
-import org.apache.lucene.util.Version;
 import org.opensearch.common.Nullable;
 import org.opensearch.knn.index.SpaceType;
 import org.opensearch.knn.index.VectorDataType;
@@ -28,6 +27,7 @@ import org.opensearch.knn.indices.ModelDao;
 
 import java.util.Locale;
 
+import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_ENABLED;
 import static org.opensearch.knn.common.KNNConstants.SPACE_TYPE;
 
 /**
@@ -77,12 +77,12 @@ public class FieldInfoExtractor {
      * @param fieldInfo {@link FieldInfo}
      * @return {@link QuantizationConfig}
      */
-    public static QuantizationConfig extractQuantizationConfig(final FieldInfo fieldInfo, Version luceneVersion) {
+    public static QuantizationConfig extractQuantizationConfig(final FieldInfo fieldInfo) {
         String quantizationConfigString = fieldInfo.getAttribute(QFRAMEWORK_CONFIG);
         if (StringUtils.isEmpty(quantizationConfigString)) {
             return QuantizationConfig.EMPTY;
         }
-        return QuantizationConfigParser.fromCsv(quantizationConfigString, luceneVersion);
+        return QuantizationConfigParser.fromCsv(quantizationConfigString);
     }
 
     /**
@@ -117,6 +117,16 @@ public class FieldInfoExtractor {
             throw new IllegalArgumentException(String.format(Locale.ROOT, "Unable to find the model metadata for model id %s", modelId));
         }
         return modelMetadata.getSpaceType();
+    }
+
+    /**
+     * Checks whether deferred LeanVec training is enabled for a field.
+     *
+     * @param fieldInfo the field info
+     * @return true if deferred training is enabled
+     */
+    public static boolean isDeferredLeanVecEnabled(final FieldInfo fieldInfo) {
+        return "true".equals(fieldInfo.attributes().get(DEFERRED_TRAINING_ENABLED));
     }
 
     /**

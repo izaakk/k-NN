@@ -15,7 +15,7 @@ buildscript {
     ext {
         // build.version_qualifier parameter applies to knn plugin artifacts only. OpenSearch version must be set
         // explicitly as 'opensearch.version' property, for instance opensearch.version=2.0.0-rc1-SNAPSHOT
-        opensearch_version = System.getProperty("opensearch.version", "3.3.0-SNAPSHOT")
+        opensearch_version = System.getProperty("opensearch.version", "3.4.0-SNAPSHOT")
         version_qualifier = System.getProperty("build.version_qualifier", "")
         opensearch_group = "org.opensearch"
         isSnapshot = "true" == System.getProperty("build.snapshot", "true")
@@ -63,8 +63,7 @@ buildscript {
     // This isn't applying from repositories.gradle so repeating git diff it here
     repositories {
         mavenLocal()
-        maven { url "https://central.sonatype.com/repository/maven-snapshots/" }
-        maven { url "https://aws.oss.sonatype.org/content/repositories/snapshots" }
+        maven { url "https://ci.opensearch.org/ci/dbc/snapshots/maven/" }
         mavenCentral()
         maven { url "https://plugins.gradle.org/m2/" }
     }
@@ -229,8 +228,9 @@ allprojects {
         version += "-SNAPSHOT"
     }
     apply from: rootProject.file('build-tools/repositories.gradle').absoluteFile
-    plugins.withId('java') {
-        sourceCompatibility = targetCompatibility = "21"
+    java {
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     afterEvaluate {
@@ -257,10 +257,11 @@ publishing {
     repositories {
         maven {
             name = "Snapshots"
-            url = "https://central.sonatype.com/repository/maven-snapshots/"
-            credentials {
-                username System.getenv("SONATYPE_USERNAME")
-                password System.getenv("SONATYPE_PASSWORD")
+            url = System.getenv("MAVEN_SNAPSHOTS_S3_REPO")
+            credentials(AwsCredentials) {
+                accessKey = System.getenv("AWS_ACCESS_KEY_ID")
+                secretKey = System.getenv("AWS_SECRET_ACCESS_KEY")
+                sessionToken = System.getenv("AWS_SESSION_TOKEN")
             }
         }
     }
@@ -289,9 +290,22 @@ publishing {
 
 compileJava {
     options.compilerArgs.addAll(["-processor", 'lombok.launch.AnnotationProcessorHider$AnnotationProcessor'])
+
+    // Since MemorySegment is not available until JDK22, exclude it when packaging and only include it for Java22+.
+    def javaExt = project.extensions.getByType(JavaPluginExtension)
+    if (javaExt.sourceCompatibility <= JavaVersion.VERSION_21 || javaExt.targetCompatibility <= JavaVersion.VERSION_21) {
+        exclude("org/opensearch/knn/memoryoptsearch/MemorySegmentAddressExtractorJDK22.java")
+    }
 }
 compileTestJava {
     options.compilerArgs.addAll(["-processor", 'lombok.launch.AnnotationProcessorHider$AnnotationProcessor'])
+}
+javadoc {
+    // Block generating Java doc as it will complain MemorySegment is under preview for Java21.
+    def javaExt = project.extensions.getByType(JavaPluginExtension)
+    if (javaExt.sourceCompatibility <= JavaVersion.VERSION_21 || javaExt.targetCompatibility <= JavaVersion.VERSION_21) {
+        exclude("org/opensearch/knn/memoryoptsearch/MemorySegmentAddressExtractorJDK22.java")
+    }
 }
 compileTestFixturesJava {
     options.compilerArgs.addAll(["-processor", 'lombok.launch.AnnotationProcessorHider$AnnotationProcessor'])
@@ -306,6 +320,27 @@ if (!usingRemoteCluster) {
     if (!usingMultiNode) {
         apply from: 'build-tools/knnplugin-coverage.gradle'
     }
+}
+
+tasks.register('validateLibraryUsage') {
+    dependsOn compileJava
+    doLast {
+        fileTree('build/classes').include('**/*.class').each { classFile ->
+            if (classFile.absolutePath.contains('KNNLibraryLoader')) return
+
+            def bytes = classFile.bytes
+            def foundLoadLibrary = scanForLoadLibrary(bytes)
+
+            if (foundLoadLibrary) {
+                throw new GradleException("System.loadLibrary call found in ${classFile.absolutePath}. Add any JNI library loading functionality into KNNLibraryLoader!")
+            }
+        }
+    }
+}
+
+static def scanForLoadLibrary(byte[] classBytes) {
+    def bytesAsString = new String(classBytes, "ISO-8859-1")
+    return bytesAsString.contains("java/lang/System") && bytesAsString.contains("loadLibrary")
 }
 
 check.dependsOn spotlessCheck
@@ -331,6 +366,102 @@ task release(type: Copy, group: 'build') {
     into "build/plugins/opensearch-knn"
     includeEmptyDirs = false
     eachFile { it.path = it.path - "opensearch/" }
+}
+
+tasks.register('generateTaskGraph') {
+    group = 'documentation'
+    description = 'Generates a Mermaid graph of the build task dependencies'
+    
+    doLast {
+        def buildTask = project.tasks.getByName('build')
+        def taskDeps = [:]
+        def mustRunAfter = [:]
+        
+        def finalizedBy = [:]
+        
+        def collectDeps
+        collectDeps = { task ->
+            if (taskDeps.containsKey(task.name)) return
+            
+            def deps = task.taskDependencies.getDependencies(task)
+            def mustRunAfterTasks = task.mustRunAfter.getDependencies(task)
+            def finalizedByTasks = task.finalizedBy.getDependencies(task)
+            
+            finalizedBy[task.name] = finalizedByTasks.collect { it.name }.findAll { it != task.name }
+
+            // Combine regular dependencies and mustRunAfter, filter out self-dependencies
+            def allDeps = (deps + mustRunAfterTasks).collect { it.name }.unique().findAll { it != task.name }
+            taskDeps[task.name] = allDeps
+            
+            (deps + mustRunAfterTasks + finalizedByTasks).each { collectDeps(it) }
+        }
+        
+        collectDeps(buildTask)
+        
+        def taskToLevel = [:]
+        
+        def calculateLevel
+        calculateLevel = { taskName ->
+            if (taskToLevel.containsKey(taskName)) {
+                return taskToLevel[taskName]
+            }
+            
+            def allConstraints = taskDeps[taskName] ?: []
+            
+            if (allConstraints.isEmpty()) {
+                taskToLevel[taskName] = 0
+                return 0
+            }
+            
+            def depLevels = allConstraints.collect { calculateLevel(it) }
+            def maxDepLevel = depLevels.isEmpty() ? -1 : depLevels.max()
+            def level = maxDepLevel + 1
+            taskToLevel[taskName] = level
+            return level
+        }
+        
+        // Proper transitive reduction
+        def reducedDeps = [:]
+        
+        def isReachable
+        isReachable = { from, to, visited = [] as Set ->
+            if (from == to) return true
+            if (visited.contains(from)) return false
+            visited.add(from)
+            return (taskDeps[from] ?: []).any { dep -> isReachable(dep, to, visited) }
+        }
+        
+        taskDeps.each { taskName, deps ->
+            def directDeps = deps.findAll { dep ->
+                !deps.any { otherDep -> otherDep != dep && isReachable(otherDep, dep) }
+            }
+            reducedDeps[taskName] = directDeps
+        }
+        
+        def mermaid = [
+            '%%{init: {"flowchart": {"nodeSpacing": 50, "rankSpacing": 80}}}%%',
+            'graph TD'
+        ]
+        
+        // Generate connections with reduced dependencies
+        reducedDeps.each { taskName, deps ->
+            deps.each { dep ->
+                mermaid << "    ${dep} --> ${taskName}"
+            }
+        }
+        
+        // Generate bold arrows for finalizedBy relationships
+        finalizedBy.each { taskName, finalizedTasks ->
+            finalizedTasks.each { finalizedTask ->
+                mermaid << "    ${taskName} ==> ${finalizedTask}"
+            }
+        }
+        
+        def outputFile = file('GRADLE_GRAPH.md')
+        outputFile.text = "# Gradle Build Task Graph\n\nDependency DAG with transitive dependencies removed for clarity.\n\nPrompt AI with questions like 'Analyzing GRADLE_GRAPH.md, does buildJniTest come before integTest?'\n\nRegenerate with `./gradlew generateTaskGraph`\n\n```mermaid\n${mermaid.join('\n')}\n```\n"
+        
+        println "Task graph generated in GRADLE_GRAPH.md"
+    }
 }
 
 
@@ -424,7 +555,7 @@ tasks.register('buildJniLib', Exec) {
     args.add("--build")
     args.add("jni/build")
     args.add("--target")
-    def knn_libs = ['opensearchknn_faiss', 'opensearchknn_common', 'opensearchknn_nmslib']
+    def knn_libs = ['opensearchknn_faiss', 'opensearchknn_common', 'opensearchknn_nmslib', 'opensearchknn_simd']
     if (project.hasProperty('knn_libs')) {
         knn_libs = ['opensearchknn_common'] + project.knn_libs.split(',').collect { it.trim() }
     }
@@ -435,12 +566,28 @@ tasks.register('buildJniLib', Exec) {
     commandLine args
 }
 
-test {
+jar.finalizedBy validateLibraryUsage
+
+tasks.register('buildJniTest', Test) {
     dependsOn buildJniLib
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    systemProperty 'tests.security.manager', 'false'
+    systemProperty "java.library.path", "$rootDir/jni/build/release"
+    systemProperty "jdk.attach.allowAttachSelf", true
+    include '**/*BT*' // Build tests will be denoted with BT to show they come before other tests
+    if (Os.isFamily(Os.FAMILY_WINDOWS)) {
+        environment('PATH', System.getenv('PATH') + ";$rootDir/jni/build/release" + ";$rootDir/src/main/resources/windowsDependencies")
+    }
+}
+
+test {
+    dependsOn buildJniTest
     systemProperty 'tests.security.manager', 'false'
     systemProperty "java.library.path", "$rootDir/jni/build/release"
     //this change enables mockito-inline that supports mocking of static classes/calls
     systemProperty "jdk.attach.allowAttachSelf", true
+    exclude '**/*BT*'
     if (Os.isFamily(Os.FAMILY_WINDOWS)) {
         // Add the paths of built JNI libraries and its dependent libraries to PATH variable in System variables
         environment('PATH', System.getenv('PATH') + ";$rootDir/jni/build/release" + ";$rootDir/src/main/resources/windowsDependencies")
@@ -482,6 +629,7 @@ def commonIntegTest(RestIntegTestTask task, project, integTestDependOnJniLib, op
         task.systemProperty 'cluster.debug', isDebuggingCluster
         // Set number of nodes system property to be used in tests
         task.systemProperty 'cluster.number_of_nodes', "${_numNodes}"
+
         // There seems to be an issue when running multi node run or integ tasks with unicast_hosts
         // not being written, the waitForAllConditions ensures it's written
         task.getClusters().forEach { cluster ->
@@ -498,6 +646,7 @@ def commonIntegTest(RestIntegTestTask task, project, integTestDependOnJniLib, op
 
 integTest {
     commonIntegTest(it, project, integTestDependOnJniLib, opensearch_tmp_dir, _numNodes)
+    mustRunAfter test
 }
 
 task integTestRemoteIndexBuild(type: RestIntegTestTask) {
@@ -541,6 +690,7 @@ def commonIntegTestClusters(OpenSearchCluster cluster, _numNodes){
             debugPort += 1
         }
     }
+
     cluster.systemProperty("java.library.path", "$rootDir/jni/build/release")
     final testSnapshotFolder = file("${buildDir}/testSnapshotFolder")
     testSnapshotFolder.mkdirs()
@@ -550,6 +700,8 @@ def commonIntegTestClusters(OpenSearchCluster cluster, _numNodes){
 
 testClusters.integTest {
     commonIntegTestClusters(it, _numNodes)
+    // Forcing optimistic search for testing
+    systemProperty 'mem_opt_srch.force_reenter', 'true'
 }
 
 testClusters.integTestRemoteIndexBuild {
@@ -562,6 +714,8 @@ testClusters.integTestRemoteIndexBuild {
     keystore 's3.client.default.access_key', "${System.getProperty("access_key")}"
     keystore 's3.client.default.secret_key', "${System.getProperty("secret_key")}"
     keystore 's3.client.default.session_token', "${System.getProperty("session_token")}"
+    // Forcing optimistic search for testing
+    systemProperty 'mem_opt_srch.force_reenter', 'true'
 }
 
 task integTestRemote(type: RestIntegTestTask) {

@@ -68,6 +68,7 @@ import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
 import static org.opensearch.knn.common.KNNConstants.METHOD_HNSW;
 import static org.opensearch.knn.common.KNNConstants.METHOD_IVF;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_DEGREE;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_EF_CONSTRUCTION;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_M;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_NLIST;
@@ -2608,6 +2609,489 @@ public class FaissIT extends KNNRestTestCase {
                 );
             }
         }
+    }
+
+    // ====================================================================
+    // SVS (Scalable Vector Search) Integration Tests
+    // ====================================================================
+
+    /**
+     * Test basic SVS Flat index creation and search with L2 space
+     * This validates that the SVS method is correctly registered and can be used
+     */
+    @SneakyThrows
+    public void testSVSFlat_whenBasicConfiguration_thenSucceed() {
+        String indexName = "test-svs-flat-basic";
+        String fieldName = "test-field";
+        int dimension = 3;
+        SpaceType spaceType = SpaceType.L2;
+
+        XContentBuilder builder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("properties")
+            .startObject(fieldName)
+            .field("type", "knn_vector")
+            .field("dimension", dimension)
+            .startObject(KNN_METHOD)
+            .field(NAME, "svs_flat")
+            .field(METHOD_PARAMETER_SPACE_TYPE, spaceType.getValue())
+            .field(KNN_ENGINE, KNNEngine.FAISS.getName())
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject();
+
+        String mapping = builder.toString();
+        createKnnIndex(indexName, mapping);
+
+        // Bulk API avoids per-document refreshes that cause multiple segment flushes for SVS
+        bulkAddKnnDocs(indexName, fieldName, new float[][] { { 1.0f, 1.0f, 1.0f }, { 2.0f, 2.0f, 2.0f }, { 3.0f, 3.0f, 3.0f } }, 3);
+
+        refreshAllNonSystemIndices();
+        assertEquals(3, getDocCount(indexName));
+
+        float[] queryVector = new float[] { 1.0f, 1.0f, 1.0f };
+        int k = 2;
+        Response response = searchKNNIndex(indexName, new KNNQueryBuilder(fieldName, queryVector, k), k);
+        String responseBody = EntityUtils.toString(response.getEntity());
+        List<KNNResult> results = parseSearchResponse(responseBody, fieldName);
+
+        assertEquals(2, results.size());
+
+        deleteKNNIndex(indexName);
+    }
+
+    public void testSVSVamana_whenBasicConfiguration_thenSucceed() throws Exception {
+        String indexName = "test-svs-vamana-basic";
+        String fieldName = "test-field";
+        int dimension = 3;
+        SpaceType spaceType = SpaceType.L2;
+
+        XContentBuilder builder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("properties")
+            .startObject(fieldName)
+            .field("type", "knn_vector")
+            .field("dimension", dimension)
+            .startObject(KNN_METHOD)
+            .field(NAME, "svs_vamana")
+            .field(METHOD_PARAMETER_SPACE_TYPE, spaceType.getValue())
+            .field(KNN_ENGINE, KNNEngine.FAISS.getName())
+            .startObject(PARAMETERS)
+            .field(METHOD_PARAMETER_DEGREE, 64)
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject();
+
+        String mapping = builder.toString();
+        createKnnIndex(indexName, mapping);
+
+        bulkAddKnnDocs(indexName, fieldName, new float[][] { { 1.0f, 1.0f, 1.0f }, { 2.0f, 2.0f, 2.0f }, { 3.0f, 3.0f, 3.0f } }, 3);
+
+        refreshAllNonSystemIndices();
+        assertEquals(3, getDocCount(indexName));
+
+        float[] queryVector = new float[] { 1.0f, 1.0f, 1.0f };
+        int k = 2;
+        Response response = searchKNNIndex(indexName, new KNNQueryBuilder(fieldName, queryVector, k), k);
+        String responseBody = EntityUtils.toString(response.getEntity());
+        List<KNNResult> results = parseSearchResponse(responseBody, fieldName);
+
+        assertEquals(2, results.size());
+
+        deleteKNNIndex(indexName);
+    }
+
+    public void testSVSVamana_withFP16Encoder_thenSucceed() throws Exception {
+        String indexName = "test-svs-vamana-fp16";
+        String fieldName = "test-field";
+        int dimension = 3;
+        SpaceType spaceType = SpaceType.L2;
+
+        XContentBuilder builder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("properties")
+            .startObject(fieldName)
+            .field("type", "knn_vector")
+            .field("dimension", dimension)
+            .startObject(KNN_METHOD)
+            .field(NAME, "svs_vamana")
+            .field(METHOD_PARAMETER_SPACE_TYPE, spaceType.getValue())
+            .field(KNN_ENGINE, KNNEngine.FAISS.getName())
+            .startObject(PARAMETERS)
+            .field(METHOD_PARAMETER_DEGREE, 64)
+            .startObject(METHOD_ENCODER_PARAMETER)
+            .field(NAME, "svs_fp16")
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject();
+
+        String mapping = builder.toString();
+        createKnnIndex(indexName, mapping);
+
+        bulkAddKnnDocs(indexName, fieldName, new float[][] { { 1.0f, 1.0f, 1.0f }, { 2.0f, 2.0f, 2.0f }, { 3.0f, 3.0f, 3.0f } }, 3);
+
+        refreshAllNonSystemIndices();
+        assertEquals(3, getDocCount(indexName));
+
+        float[] queryVector = new float[] { 1.0f, 1.0f, 1.0f };
+        int k = 2;
+        Response response = searchKNNIndex(indexName, new KNNQueryBuilder(fieldName, queryVector, k), k);
+        String responseBody = EntityUtils.toString(response.getEntity());
+        List<KNNResult> results = parseSearchResponse(responseBody, fieldName);
+
+        assertEquals(2, results.size());
+
+        deleteKNNIndex(indexName);
+    }
+
+    public void testSVSVamana_withSQ8Encoder_thenSucceed() throws Exception {
+        String indexName = "test-svs-vamana-sq8";
+        String fieldName = "test-field";
+        int dimension = 3;
+        SpaceType spaceType = SpaceType.L2;
+
+        XContentBuilder builder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("properties")
+            .startObject(fieldName)
+            .field("type", "knn_vector")
+            .field("dimension", dimension)
+            .startObject(KNN_METHOD)
+            .field(NAME, "svs_vamana")
+            .field(METHOD_PARAMETER_SPACE_TYPE, spaceType.getValue())
+            .field(KNN_ENGINE, KNNEngine.FAISS.getName())
+            .startObject(PARAMETERS)
+            .field(METHOD_PARAMETER_DEGREE, 64)
+            .startObject(METHOD_ENCODER_PARAMETER)
+            .field(NAME, "svs_sq8")
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject();
+
+        String mapping = builder.toString();
+        createKnnIndex(indexName, mapping);
+
+        bulkAddKnnDocs(indexName, fieldName, new float[][] { { 1.0f, 1.0f, 1.0f }, { 2.0f, 2.0f, 2.0f }, { 3.0f, 3.0f, 3.0f } }, 3);
+
+        refreshAllNonSystemIndices();
+        assertEquals(3, getDocCount(indexName));
+
+        float[] queryVector = new float[] { 1.0f, 1.0f, 1.0f };
+        int k = 2;
+        Response response = searchKNNIndex(indexName, new KNNQueryBuilder(fieldName, queryVector, k), k);
+        String responseBody = EntityUtils.toString(response.getEntity());
+        List<KNNResult> results = parseSearchResponse(responseBody, fieldName);
+
+        assertEquals(2, results.size());
+
+        deleteKNNIndex(indexName);
+    }
+
+    public void testSVSVamana_withLVQEncoder_thenSucceed() throws Exception {
+        String indexName = "test-svs-vamana-lvq";
+        String fieldName = "test-field";
+        int dimension = 3;
+        SpaceType spaceType = SpaceType.L2;
+
+        XContentBuilder builder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("properties")
+            .startObject(fieldName)
+            .field("type", "knn_vector")
+            .field("dimension", dimension)
+            .startObject(KNN_METHOD)
+            .field(NAME, "svs_vamana")
+            .field(METHOD_PARAMETER_SPACE_TYPE, spaceType.getValue())
+            .field(KNN_ENGINE, KNNEngine.FAISS.getName())
+            .startObject(PARAMETERS)
+            .field(METHOD_PARAMETER_DEGREE, 64)
+            .startObject(METHOD_ENCODER_PARAMETER)
+            .field(NAME, "lvq")
+            .startObject(PARAMETERS)
+            .field("primary_bits", 4)
+            .field("residual_bits", 4)
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject();
+
+        String mapping = builder.toString();
+        createKnnIndex(indexName, mapping);
+
+        bulkAddKnnDocs(indexName, fieldName, new float[][] { { 1.0f, 1.0f, 1.0f }, { 2.0f, 2.0f, 2.0f }, { 3.0f, 3.0f, 3.0f } }, 3);
+
+        refreshAllNonSystemIndices();
+        assertEquals(3, getDocCount(indexName));
+
+        float[] queryVector = new float[] { 1.0f, 1.0f, 1.0f };
+        int k = 2;
+        Response response = searchKNNIndex(indexName, new KNNQueryBuilder(fieldName, queryVector, k), k);
+        String responseBody = EntityUtils.toString(response.getEntity());
+        List<KNNResult> results = parseSearchResponse(responseBody, fieldName);
+
+        assertEquals(2, results.size());
+
+        deleteKNNIndex(indexName);
+    }
+
+    /**
+     * Test SVS Vamana index with LeanVec encoder using model-based training.
+     * LeanVec requires training to compute transformation matrices.
+     */
+    @SneakyThrows
+    public void testSVSVamana_withLeanVecEncoder_usingTrainedModel_thenSucceed() {
+        String indexName = "test-index-svs-leanvec";
+        String fieldName = "test-field";
+        String trainingIndexName = "training-index-svs-leanvec";
+        String trainingFieldName = "training-field";
+
+        String modelId = "test-model-svs-leanvec";
+        String modelDescription = "SVS Vamana with LeanVec encoder model";
+
+        int dimension = 128;
+        int trainingDataCount = 1100; // Sufficient training data for LeanVec
+        SpaceType spaceType = SpaceType.L2;
+
+        createBasicKnnIndex(trainingIndexName, trainingFieldName, dimension);
+        bulkIngestRandomVectors(trainingIndexName, trainingFieldName, trainingDataCount, dimension);
+
+        XContentBuilder methodBuilder = XContentFactory.jsonBuilder()
+            .startObject()
+            .field(NAME, "svs_vamana")
+            .field(KNN_ENGINE, FAISS_NAME)
+            .field(METHOD_PARAMETER_SPACE_TYPE, spaceType.getValue())
+            .startObject(PARAMETERS)
+            .field(METHOD_PARAMETER_DEGREE, 64)
+            .startObject(METHOD_ENCODER_PARAMETER)
+            .field(NAME, "leanvec")
+            .startObject(PARAMETERS)
+            .field("primary_bits", 4)
+            .field("residual_bits", 4)
+            .field("dimensions", 0)
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject();
+        Map<String, Object> method = xContentBuilderToMap(methodBuilder);
+
+        trainModel(modelId, trainingIndexName, trainingFieldName, dimension, method, modelDescription);
+        assertTrainingSucceeds(modelId, 360, 1000);
+
+        XContentBuilder builder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("properties")
+            .startObject(fieldName)
+            .field("type", "knn_vector")
+            .field(MODEL_ID, modelId)
+            .endObject()
+            .endObject()
+            .endObject();
+
+        Map<String, Object> mappingMap = xContentBuilderToMap(builder);
+        String mapping = builder.toString();
+
+        createKnnIndex(indexName, mapping);
+        assertEquals(new TreeMap<>(mappingMap), new TreeMap<>(getIndexMappingAsMap(indexName)));
+
+        int numDocs = 100;
+        for (int i = 0; i < Math.min(testData.indexData.docs.length, numDocs); i++) {
+            addKnnDoc(
+                indexName,
+                Integer.toString(testData.indexData.docs[i]),
+                fieldName,
+                Floats.asList(testData.indexData.vectors[i]).toArray()
+            );
+        }
+
+        refreshAllNonSystemIndices();
+        assertEquals(Math.min(testData.indexData.docs.length, numDocs), getDocCount(indexName));
+
+        int k = 10;
+        for (int i = 0; i < Math.min(testData.queries.length, 10); i++) {
+            Response response = searchKNNIndex(indexName, new KNNQueryBuilder(fieldName, testData.queries[i], k), k);
+            String responseBody = EntityUtils.toString(response.getEntity());
+            List<KNNResult> knnResults = parseSearchResponse(responseBody, fieldName);
+            assertEquals(k, knnResults.size());
+
+            List<Float> actualScores = parseSearchResponseScore(responseBody, fieldName);
+            for (int j = 0; j < k; j++) {
+                float[] primitiveArray = knnResults.get(j).getVector();
+                assertEquals(
+                    KNNEngine.FAISS.score(KNNScoringUtil.l2Squared(testData.queries[i], primitiveArray), spaceType),
+                    actualScores.get(j),
+                    0.0001
+                );
+            }
+        }
+
+        deleteKNNIndex(indexName);
+        deleteKNNIndex(trainingIndexName);
+        deleteModel(modelId);
+        validateGraphEviction();
+    }
+
+    /**
+     * Test SVS Vamana index with LeanVec encoder using direct creation (no model).
+     * 
+     * LeanVec requires training to compute transformation matrices. In direct index creation,
+     * OpenSearch's native layer handles the train-then-add pattern automatically:
+     * 1. Collects all vectors during index building
+     * 2. Calls train(vectors) to compute transformation matrices
+     * 3. Calls add(vectors) with the same data to build the index
+     */
+    @SneakyThrows
+    public void testSVSVamana_withLeanVecEncoder_directCreation_thenSucceed() {
+        String indexName = "test-index-svs-leanvec-direct";
+        String fieldName = "test-field";
+
+        int dimension = 128;
+        SpaceType spaceType = SpaceType.L2;
+
+        XContentBuilder builder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("properties")
+            .startObject(fieldName)
+            .field("type", "knn_vector")
+            .field("dimension", dimension)
+            .startObject(KNN_METHOD)
+            .field(NAME, "svs_vamana")
+            .field(KNN_ENGINE, FAISS_NAME)
+            .field(METHOD_PARAMETER_SPACE_TYPE, spaceType.getValue())
+            .startObject(PARAMETERS)
+            .field(METHOD_PARAMETER_DEGREE, 64)
+            .startObject(METHOD_ENCODER_PARAMETER)
+            .field(NAME, "leanvec")
+            .startObject(PARAMETERS)
+            .field("primary_bits", 4)
+            .field("residual_bits", 4)
+            .field("dimensions", 16)  // Compressed dimension
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject();
+
+        Map<String, Object> mappingMap = xContentBuilderToMap(builder);
+        String mapping = builder.toString();
+
+        createKnnIndex(indexName, mapping);
+        assertEquals(new TreeMap<>(mappingMap), new TreeMap<>(getIndexMappingAsMap(indexName)));
+
+        // Native layer handles the train-then-add pattern: collect vectors -> train() -> add()
+        int numDocs = 100;
+        for (int i = 0; i < Math.min(testData.indexData.docs.length, numDocs); i++) {
+            addKnnDoc(
+                indexName,
+                Integer.toString(testData.indexData.docs[i]),
+                fieldName,
+                Floats.asList(testData.indexData.vectors[i]).toArray()
+            );
+        }
+
+        refreshAllNonSystemIndices();
+        assertEquals(Math.min(testData.indexData.docs.length, numDocs), getDocCount(indexName));
+
+        int k = 10;
+        for (int i = 0; i < Math.min(testData.queries.length, 10); i++) {
+            Response response = searchKNNIndex(indexName, new KNNQueryBuilder(fieldName, testData.queries[i], k), k);
+            String responseBody = EntityUtils.toString(response.getEntity());
+            List<KNNResult> knnResults = parseSearchResponse(responseBody, fieldName);
+            assertEquals(k, knnResults.size());
+
+            List<String> docIdsFromResponse = knnResults.stream().map(KNNResult::getDocId).collect(Collectors.toList());
+            assertEquals(k, docIdsFromResponse.size());
+        }
+
+        deleteKNNIndex(indexName);
+    }
+
+    @SneakyThrows
+    public void testSVSVamana_withLeanVecEncoder_workflowOnly_thenSucceed() {
+        String indexName = "test-index-svs-leanvec-workflow";
+        String fieldName = "test-field";
+        String trainingIndexName = "training-index-svs-leanvec-workflow";
+        String trainingFieldName = "training-field";
+
+        String modelId = "test-model-svs-leanvec-workflow";
+        String modelDescription = "SVS Vamana with LeanVec encoder model - workflow test";
+
+        int dimension = 128;
+        int trainingDataCount = 1100; // Sufficient training data for LeanVec
+        int numDocs = 100;
+
+        createBasicKnnIndex(trainingIndexName, trainingFieldName, dimension);
+        bulkIngestRandomVectors(trainingIndexName, trainingFieldName, trainingDataCount, dimension);
+
+        XContentBuilder methodBuilder = XContentFactory.jsonBuilder()
+            .startObject()
+            .field(NAME, "svs_vamana")
+            .field(KNN_ENGINE, FAISS_NAME)
+            .field(METHOD_PARAMETER_SPACE_TYPE, "l2")
+            .startObject(PARAMETERS)
+            .field(METHOD_PARAMETER_DEGREE, 64)
+            .startObject(METHOD_ENCODER_PARAMETER)
+            .field(NAME, "leanvec")
+            .startObject(PARAMETERS)
+            .field("primary_bits", 4)
+            .field("residual_bits", 4)
+            .field("dimensions", 0)
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject();
+        Map<String, Object> method = xContentBuilderToMap(methodBuilder);
+
+        trainModel(modelId, trainingIndexName, trainingFieldName, dimension, method, modelDescription);
+        assertTrainingSucceeds(modelId, 360, 1000);
+
+        XContentBuilder builder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("properties")
+            .startObject(fieldName)
+            .field("type", "knn_vector")
+            .field(MODEL_ID, modelId)
+            .endObject()
+            .endObject()
+            .endObject();
+
+        String mapping = builder.toString();
+        createKnnIndex(indexName, getKNNDefaultIndexSettings(), mapping);
+
+        for (int i = 0; i < numDocs; i++) {
+            float[] indexVector = new float[dimension];
+            Arrays.fill(indexVector, (float) i);
+            addKnnDocWithAttributes(indexName, Integer.toString(i), fieldName, indexVector, ImmutableMap.of("rating", String.valueOf(i)));
+        }
+
+        // LeanVec may silently drop vectors that don't survive quantization
+        refreshAllNonSystemIndices();
+        int actualDocCount = getDocCount(indexName);
+        assertTrue("Expected some documents to be indexed, but got: " + actualDocCount, actualDocCount > 0);
+
+        float[] queryVector = new float[dimension];
+        Arrays.fill(queryVector, (float) numDocs);
+        int k = 10;
+        Response searchResponse = searchKNNIndex(indexName, buildSearchQuery(fieldName, k, queryVector, null), k);
+        List<KNNResult> results = parseSearchResponse(EntityUtils.toString(searchResponse.getEntity()), fieldName);
+        assertTrue("Expected search to return some results, but got: " + results.size(), results.size() > 0);
+
+        deleteKNNIndex(indexName);
+        deleteModel(modelId);
+        validateGraphEviction();
     }
 
 }
