@@ -101,6 +101,7 @@ find_package(LAPACK REQUIRED)
 set(BUILD_TESTING OFF)          # Avoid building faiss tests
 set(FAISS_ENABLE_GPU OFF)
 set(FAISS_ENABLE_PYTHON OFF)
+set(FAISS_ENABLE_SVS ON)        # Enable SVS (Intel Scalable Vector Search) integration
 
 # On Windows, define FAISS_MAIN_LIB to export symbols when building the Faiss library
 if(${CMAKE_SYSTEM_NAME} STREQUAL Windows)

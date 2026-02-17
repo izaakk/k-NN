@@ -17,6 +17,8 @@ public class KNNConstants {
     public static final String NAME = "name";
     public static final String PARAMETERS = "parameters";
     public static final String METHOD_HNSW = "hnsw";
+    public static final String METHOD_SVS_FLAT = "svs_flat";
+    public static final String METHOD_SVS_VAMANA = "svs_vamana";
     public static final String TYPE = "type";
     public static final String TYPE_NESTED = "nested";
     public static final String PATH = "path";
@@ -34,9 +36,36 @@ public class KNNConstants {
     public static final String METHOD_PARAMETER_EF_SEARCH = "ef_search";
     public static final String METHOD_PARAMETER_EF_CONSTRUCTION = "ef_construction";
     public static final String METHOD_PARAMETER_M = "m";
+    public static final String METHOD_PARAMETER_DEGREE = "degree";
+    public static final String METHOD_PARAMETER_SEARCH_WINDOW_SIZE = "search_window_size";
+    public static final String METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY = "search_buffer_capacity";
+
+    // SVS Vamana construction-time parameter
+    public static final String METHOD_PARAMETER_CONSTRUCTION_WINDOW_SIZE = "construction_window_size";
+
     public static final String METHOD_IVF = "ivf";
     public static final String METHOD_PARAMETER_NLIST = "nlist";
     public static final String METHOD_PARAMETER_SPACE_TYPE = "space_type"; // used for mapping parameter
+
+    // SVS encoder parameters
+    public static final String METHOD_PARAMETER_LVQ_PRIMARY_BITS = "primary_bits";
+    public static final String METHOD_PARAMETER_LVQ_RESIDUAL_BITS = "residual_bits";
+    public static final String METHOD_PARAMETER_LEANVEC_PRIMARY_BITS = "primary_bits";
+    public static final String METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS = "residual_bits";
+    public static final String METHOD_PARAMETER_LEANVEC_DIMENSIONS = "dimensions";
+    public static final String METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD = "training_threshold";
+    public static final String METHOD_PARAMETER_LEANVEC_INITIAL_TRAINING_THRESHOLD = "initial_training_threshold";
+
+    // Deferred LeanVec training constants (per-shard model)
+    public static final String DEFERRED_TRAINING_ENABLED = "deferred_training_enabled";
+    public static final String DEFERRED_TRAINING_THRESHOLD = "deferred_training_threshold";
+    public static final String DEFERRED_TRAINING_INITIAL_THRESHOLD = "deferred_training_initial_threshold";
+    public static final String DEFERRED_TRAINING_LEANVEC_DIMS = "deferred_training_leanvec_dims";
+    public static final int DEFERRED_TRAINING_DEFAULT_THRESHOLD = 100000;
+    public static final int DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD = 10000;
+    public static final String LEANVEC_MODEL_FILE_SUFFIX = "knnlvm";
+    public static final String SHARD_MODEL_BLOB_PARAMETER = "shard_model_blob";
+
     // used for defining toplevel parameter
     public static final String TOP_LEVEL_PARAMETER_SPACE_TYPE = METHOD_PARAMETER_SPACE_TYPE;
     public static final String TOP_LEVEL_PARAMETER_ENGINE = KNN_ENGINE;
@@ -130,10 +159,16 @@ public class KNNConstants {
     public static final String FAISS_IVF_DESCRIPTION = "IVF";
     public static final String FAISS_FLAT_DESCRIPTION = "Flat";
     public static final String FAISS_PQ_DESCRIPTION = "PQ";
+    public static final String FAISS_SVS_FLAT_DESCRIPTION = "SVSFlat";
+    public static final String FAISS_SVS_VAMANA_DESCRIPTION = "SVSVamana";
     public static final String ENCODER_SQ = "sq";
     public static final String FAISS_SQ_DESCRIPTION = "SQ";
     public static final String FAISS_SQ_TYPE = "type";
     public static final String FAISS_SQ_ENCODER_FP16 = "fp16";
+    public static final String FAISS_SVS_ENCODER_FP16 = "svs_fp16";
+    public static final String FAISS_SVS_ENCODER_SQ8 = "svs_sq8";
+    public static final String FAISS_SVS_ENCODER_LVQ = "lvq";
+    public static final String FAISS_SVS_ENCODER_LEANVEC = "leanvec";
     public static final List<String> FAISS_SQ_ENCODER_TYPES = List.of(FAISS_SQ_ENCODER_FP16);
     public static final String FAISS_SIGNED_BYTE_SQ = "SQ8_direct_signed";
     public static final String FAISS_SQ_CLIP = "clip";

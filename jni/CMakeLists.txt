@@ -122,6 +122,7 @@ if (${CONFIG_FAISS} STREQUAL ON OR ${CONFIG_ALL} STREQUAL ON OR ${CONFIG_TEST} S
         $ENV{JAVA_HOME}/include/${JVM_OS_TYPE}
         ${CMAKE_CURRENT_SOURCE_DIR}/external/faiss
     )
+    target_compile_definitions(${TARGET_LIB_FAISS} PRIVATE FAISS_ENABLE_SVS FAISS_SVS_RUNTIME_VERSION=v0)
     opensearch_set_common_properties(${TARGET_LIB_FAISS})
     list(APPEND TARGET_LIBS ${TARGET_LIB_FAISS})
 endif ()
