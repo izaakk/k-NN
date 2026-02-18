@@ -724,6 +724,10 @@ jobjectArray knn_jni::faiss_wrapper::QueryIndex_WithFilter(knn_jni::JNIUtilInter
                         svsVamanaParams.search_buffer_capacity = svsVamanaParams.search_window_size;
                     }
                     svsVamanaParams.sel = idSelector.get();
+                    if (parentIdsJ != nullptr) {
+                        idGrouper = buildIDGrouperBitmap(jniUtil, env, parentIdsJ, &idGrouperBitmap);
+                        svsVamanaParams.grp = idGrouper.get();
+                    }
                     searchParameters = &svsVamanaParams;
                 }
             }
@@ -769,6 +773,10 @@ jobjectArray knn_jni::faiss_wrapper::QueryIndex_WithFilter(knn_jni::JNIUtilInter
                     // SVS requires search_buffer_capacity >= search_window_size
                     if (svsVamanaParams.search_buffer_capacity < svsVamanaParams.search_window_size) {
                         svsVamanaParams.search_buffer_capacity = svsVamanaParams.search_window_size;
+                    }
+                    if (parentIdsJ != nullptr) {
+                        idGrouper = buildIDGrouperBitmap(jniUtil, env, parentIdsJ, &idGrouperBitmap);
+                        svsVamanaParams.grp = idGrouper.get();
                     }
                     searchParameters = &svsVamanaParams;
                 }

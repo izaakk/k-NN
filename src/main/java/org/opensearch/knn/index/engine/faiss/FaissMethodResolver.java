@@ -128,25 +128,39 @@ public class FaissMethodResolver extends AbstractMethodResolver {
         if (CompressionLevel.x2 == resolvedCompressionLevel) {
             encoderComponentContext = new MethodComponentContext(ENCODER_SQ, new HashMap<>());
             encoder = encoderMap.get(ENCODER_SQ);
-            encoderComponentContext.getParameters().put(FAISS_SQ_TYPE, FAISS_SQ_ENCODER_FP16);
+            if (encoder != null) {
+                encoderComponentContext.getParameters().put(FAISS_SQ_TYPE, FAISS_SQ_ENCODER_FP16);
+            }
         }
 
         if (CompressionLevel.x8 == resolvedCompressionLevel) {
             encoderComponentContext = new MethodComponentContext(QFrameBitEncoder.NAME, new HashMap<>());
             encoder = encoderMap.get(QFrameBitEncoder.NAME);
-            encoderComponentContext.getParameters().put(QFrameBitEncoder.BITCOUNT_PARAM, CompressionLevel.x8.numBitsForFloat32());
+            if (encoder != null) {
+                encoderComponentContext.getParameters().put(QFrameBitEncoder.BITCOUNT_PARAM, CompressionLevel.x8.numBitsForFloat32());
+            }
         }
 
         if (CompressionLevel.x16 == resolvedCompressionLevel) {
             encoderComponentContext = new MethodComponentContext(QFrameBitEncoder.NAME, new HashMap<>());
             encoder = encoderMap.get(QFrameBitEncoder.NAME);
-            encoderComponentContext.getParameters().put(QFrameBitEncoder.BITCOUNT_PARAM, CompressionLevel.x16.numBitsForFloat32());
+            if (encoder != null) {
+                encoderComponentContext.getParameters().put(QFrameBitEncoder.BITCOUNT_PARAM, CompressionLevel.x16.numBitsForFloat32());
+            }
         }
 
         if (CompressionLevel.x32 == resolvedCompressionLevel) {
             encoderComponentContext = new MethodComponentContext(QFrameBitEncoder.NAME, new HashMap<>());
             encoder = encoderMap.get(QFrameBitEncoder.NAME);
-            encoderComponentContext.getParameters().put(QFrameBitEncoder.BITCOUNT_PARAM, CompressionLevel.x32.numBitsForFloat32());
+            if (encoder != null) {
+                encoderComponentContext.getParameters().put(QFrameBitEncoder.BITCOUNT_PARAM, CompressionLevel.x32.numBitsForFloat32());
+            }
+        }
+
+        if (encoder == null) {
+            ValidationException ex = new ValidationException();
+            ex.addValidationError("The selected method does not support compression level " + resolvedCompressionLevel);
+            throw ex;
         }
 
         Map<String, Object> resolvedParams = MethodComponent.getParameterMapWithDefaultsAdded(

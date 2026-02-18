@@ -47,11 +47,11 @@ public class KNNConstants {
     public static final String METHOD_PARAMETER_NLIST = "nlist";
     public static final String METHOD_PARAMETER_SPACE_TYPE = "space_type"; // used for mapping parameter
 
-    // SVS encoder parameters
+    // SVS encoder parameters (LVQ and LeanVec share the same parameter names)
     public static final String METHOD_PARAMETER_LVQ_PRIMARY_BITS = "primary_bits";
     public static final String METHOD_PARAMETER_LVQ_RESIDUAL_BITS = "residual_bits";
-    public static final String METHOD_PARAMETER_LEANVEC_PRIMARY_BITS = "primary_bits";
-    public static final String METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS = "residual_bits";
+    public static final String METHOD_PARAMETER_LEANVEC_PRIMARY_BITS = METHOD_PARAMETER_LVQ_PRIMARY_BITS;
+    public static final String METHOD_PARAMETER_LEANVEC_RESIDUAL_BITS = METHOD_PARAMETER_LVQ_RESIDUAL_BITS;
     public static final String METHOD_PARAMETER_LEANVEC_DIMENSIONS = "dimensions";
     public static final String METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD = "training_threshold";
     public static final String METHOD_PARAMETER_LEANVEC_INITIAL_TRAINING_THRESHOLD = "initial_training_threshold";

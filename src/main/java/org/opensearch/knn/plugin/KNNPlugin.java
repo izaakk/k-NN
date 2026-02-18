@@ -417,7 +417,7 @@ public class KNNPlugin extends Plugin
                         totalVectors += sci.info.maxDoc() - sci.getDelCount();
                     }
 
-                    // Check if any .knnlvm files exist before opening DirectoryReader
+                    // Check if any .knnlvm files exist
                     boolean hasModelFiles = false;
                     for (String file : dir.listAll()) {
                         if (file.endsWith(org.opensearch.knn.common.KNNConstants.LEANVEC_MODEL_FILE_SUFFIX)) {
@@ -426,41 +426,56 @@ public class KNNPlugin extends Plugin
                         }
                     }
 
-                    // Open DirectoryReader to access FieldInfos and find deferred-training fields
-                    try (org.apache.lucene.index.DirectoryReader reader = org.apache.lucene.index.DirectoryReader.open(dir)) {
+                    // Read FieldInfos once per segment to avoid redundant I/O
+                    java.util.Map<String, org.apache.lucene.index.FieldInfos> fieldInfosCache = new java.util.HashMap<>();
+                    boolean hasDeferredFields = false;
+                    for (org.apache.lucene.index.SegmentCommitInfo sci : infos) {
+                        org.apache.lucene.index.FieldInfos segFieldInfos =
+                            sci.info.getCodec().fieldInfosFormat().read(
+                                dir, sci.info, "", org.apache.lucene.store.IOContext.DEFAULT);
+                        fieldInfosCache.put(sci.info.name, segFieldInfos);
+                        if (!hasDeferredFields) {
+                            for (org.apache.lucene.index.FieldInfo fi : segFieldInfos) {
+                                if ("true".equals(fi.getAttribute(
+                                        org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_ENABLED))) {
+                                    hasDeferredFields = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (hasDeferredFields) {
                         java.util.Set<String> recoveredFields = new java.util.HashSet<>();
-                        for (org.apache.lucene.index.LeafReaderContext leafCtx : reader.leaves()) {
-                            for (org.apache.lucene.index.FieldInfo fieldInfo : leafCtx.reader().getFieldInfos()) {
+                        for (org.apache.lucene.index.SegmentCommitInfo sci : infos) {
+                            org.apache.lucene.index.FieldInfos segFieldInfos = fieldInfosCache.get(sci.info.name);
+                            for (org.apache.lucene.index.FieldInfo fieldInfo : segFieldInfos) {
                                 if (recoveredFields.contains(fieldInfo.name)) continue;
-                                String deferredAttr = fieldInfo.getAttribute(
-                                    org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_ENABLED);
-                                if (!"true".equals(deferredAttr)) continue;
+                                if (!"true".equals(fieldInfo.getAttribute(
+                                        org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_ENABLED))) continue;
 
                                 ShardModelCache cache = ShardModelCache.getInstance(shardCacheKey);
 
-                                // Try to load model from any segment's .knnlvm file
+                                // Try all segments to find the highest-quality model (putModel enforces monotonic upgrades)
                                 if (hasModelFiles && !cache.hasModel(fieldInfo.name)) {
-                                    for (org.apache.lucene.index.SegmentCommitInfo sci : infos) {
-                                        // Read field number from segment's own FieldInfos
-                                        org.apache.lucene.index.FieldInfos segFieldInfos =
-                                            sci.info.getCodec().fieldInfosFormat().read(
-                                                dir, sci.info, "", org.apache.lucene.store.IOContext.DEFAULT);
-                                        org.apache.lucene.index.FieldInfo segFieldInfo =
-                                            segFieldInfos.fieldInfo(fieldInfo.name);
-                                        if (segFieldInfo == null) continue;
+                                    for (org.apache.lucene.index.SegmentCommitInfo modelSci : infos) {
+                                        org.apache.lucene.index.FieldInfos modelFieldInfos = fieldInfosCache.get(modelSci.info.name);
+                                        org.apache.lucene.index.FieldInfo modelFieldInfo =
+                                            modelFieldInfos.fieldInfo(fieldInfo.name);
+                                        if (modelFieldInfo == null) continue;
 
-                                        byte[] model = LeanVecModelReader.readFromSegment(
-                                            dir, sci, fieldInfo.name, segFieldInfo.getFieldNumber());
-                                        if (model != null) {
-                                            // Mark recovered models as INITIAL -- the upgrade
-                                            // path remains open. Next merge >= final_threshold retrains.
-                                            cache.putModel(fieldInfo.name, model,
-                                                ShardModelCache.ModelQuality.INITIAL);
-                                            KNNCounter.DEFERRED_TRAINING_MODEL_RECOVERIES.increment();
-                                            logger.info(
-                                                "[ShardStart] Loaded LeanVec model for field '{}' from segment '{}' (shard={})",
-                                                fieldInfo.name, sci.info.name, indexShard.shardId());
-                                            break;
+                                        LeanVecModelReader.ModelReadResult result =
+                                            LeanVecModelReader.readFromSegment(
+                                                dir, modelSci, fieldInfo.name, modelFieldInfo.getFieldNumber());
+                                        if (result != null) {
+                                            boolean stored = cache.putModel(fieldInfo.name, result.blob(), result.quality());
+                                            if (stored) {
+                                                KNNCounter.DEFERRED_TRAINING_MODEL_RECOVERIES.increment();
+                                                logger.info(
+                                                    "[ShardStart] Loaded LeanVec model ({}) for field '{}' from segment '{}' (shard={})",
+                                                    result.quality(), fieldInfo.name, modelSci.info.name, indexShard.shardId());
+                                            }
+                                            // Don't break — continue scanning for higher-quality models
                                         }
                                     }
                                 }

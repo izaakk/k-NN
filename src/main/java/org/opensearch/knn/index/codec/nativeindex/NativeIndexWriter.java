@@ -44,7 +44,6 @@ import static org.opensearch.knn.common.FieldInfoExtractor.extractKNNEngine;
 import static org.opensearch.knn.common.FieldInfoExtractor.extractVectorDataType;
 import static org.opensearch.knn.common.FieldInfoExtractor.isDeferredLeanVecEnabled;
 import static org.opensearch.knn.common.KNNConstants.INDEX_DESCRIPTION_PARAMETER;
-import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD;
 import static org.opensearch.knn.common.KNNConstants.MODEL_ID;
 import static org.opensearch.knn.common.KNNConstants.SHARD_MODEL_BLOB_PARAMETER;
 import static org.opensearch.knn.common.KNNConstants.PARAMETERS;
@@ -88,16 +87,10 @@ public class NativeIndexWriter {
         this.shardModelBlob = shardModelBlob;
     }
 
-    /**
-     * Gets the correct writer type from fieldInfo (no quantization, no shard model).
-     */
     public static NativeIndexWriter getWriter(final FieldInfo fieldInfo, SegmentWriteState state) {
         return createWriter(fieldInfo, state, null, new NativeIndexBuildStrategyFactory(), null);
     }
 
-    /**
-     * Gets the correct writer type with quantization state (no shard model).
-     */
     public static NativeIndexWriter getWriter(
         final FieldInfo fieldInfo,
         final SegmentWriteState state,
@@ -107,9 +100,6 @@ public class NativeIndexWriter {
         return createWriter(fieldInfo, state, quantizationState, nativeIndexBuildStrategyFactory, null);
     }
 
-    /**
-     * Gets the correct writer type with quantization state and shard model blob for deferred training.
-     */
     public static NativeIndexWriter getWriter(
         final FieldInfo fieldInfo,
         final SegmentWriteState state,
@@ -120,22 +110,11 @@ public class NativeIndexWriter {
         return createWriter(fieldInfo, state, quantizationState, nativeIndexBuildStrategyFactory, shardModelBlob);
     }
 
-    /**
-     * flushes the index
-     *
-     * @param knnVectorValuesSupplier
-     * @throws IOException
-     */
     public void flushIndex(final Supplier<KNNVectorValues<?>> knnVectorValuesSupplier, int totalLiveDocs) throws IOException {
         buildAndWriteIndex(knnVectorValuesSupplier, totalLiveDocs, true);
         recordRefreshStats();
     }
 
-    /**
-     * Merges kNN index
-     * @param knnVectorValuesSupplier
-     * @throws IOException
-     */
     public void mergeIndex(final Supplier<KNNVectorValues<?>> knnVectorValuesSupplier, int totalLiveDocs) throws IOException {
         KNNVectorValues<?> knnVectorValues = knnVectorValuesSupplier.get();
         initializeVectorValues(knnVectorValues);
@@ -396,10 +375,9 @@ public class NativeIndexWriter {
     }
 
     /**
-     * Removes training_threshold from the nested encoder parameters.
-     * training_threshold is a codec-layer parameter that leaks through MethodComponent's
-     * getParameterMapWithDefaultsAdded() into the FAISS parameters JSON. It has no meaning
-     * to FAISS/SVS and may cause JNI errors if the native layer rejects unknown parameters.
+     * Removes codec-layer LeanVec parameters (training thresholds, dimensions) from the nested
+     * encoder parameters before passing to JNI. These leak through MethodComponent's
+     * getParameterMapWithDefaultsAdded() and have no meaning to FAISS/SVS.
      */
     @SuppressWarnings("unchecked")
     private static void removeLeanVecTrainingThreshold(Map<String, Object> parameters) {
@@ -411,7 +389,10 @@ public class NativeIndexWriter {
                 Map<String, Object> encoder = (Map<String, Object>) encoderObj;
                 Object encoderParamsObj = encoder.get("parameters");
                 if (encoderParamsObj instanceof Map) {
-                    ((Map<String, Object>) encoderParamsObj).remove(METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD);
+                    Map<String, Object> encoderParams = (Map<String, Object>) encoderParamsObj;
+                    encoderParams.remove(KNNConstants.METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD);
+                    encoderParams.remove(KNNConstants.METHOD_PARAMETER_LEANVEC_INITIAL_TRAINING_THRESHOLD);
+                    encoderParams.remove(KNNConstants.METHOD_PARAMETER_LEANVEC_DIMENSIONS);
                 }
             }
         }

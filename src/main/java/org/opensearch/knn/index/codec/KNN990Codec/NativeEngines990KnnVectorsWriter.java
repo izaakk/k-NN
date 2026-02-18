@@ -167,12 +167,14 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
 
             // Load model from shard cache for flush (post-training segments use LeanVec)
             byte[] shardModelBlob = null;
+            int shardModelQualityOrdinal = 0;
             if (isDeferredLeanVecEnabled(fieldInfo)) {
                 String shardId = getShardId();
                 ShardModelCache cache = ShardModelCache.getInstance(shardId);
                 ShardModelCache.CachedModel cached = cache.getCachedModel(fieldInfo.name);
                 if (cached != null) {
                     shardModelBlob = cached.blobCopy();
+                    shardModelQualityOrdinal = cached.quality().ordinal();
                     log.info("[Flush] Encoding=LeanVec ({} model) for field '{}' ({} vectors, segment={})",
                         cached.quality(), fieldInfo.name, totalLiveDocs, segmentWriteState.segmentInfo.name);
                 } else {
@@ -194,7 +196,7 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
 
             // Persist model blob to segment file so it survives node restart
             if (shardModelBlob != null) {
-                writeLeanVecModelToSegment(fieldInfo.getFieldNumber(), shardModelBlob);
+                writeLeanVecModelToSegment(fieldInfo.getFieldNumber(), shardModelBlob, shardModelQualityOrdinal);
             }
 
             long time_in_millis = stopWatch.stop().totalTime().millis();
@@ -234,8 +236,17 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
 
         // Deferred LeanVec training: check if we should train or reuse existing model
         byte[] shardModelBlob = null;
+        int shardModelQualityOrdinal = 0;
         if (isDeferredLeanVecEnabled(fieldInfo)) {
-            shardModelBlob = maybeTriggerLeanVecTraining(fieldInfo, knnVectorValuesSupplier, totalLiveDocs);
+            // maybeTriggerLeanVecTraining stores results in cache; re-read atomically
+            // to get a consistent (blob, quality) pair and avoid TOCTOU mismatch.
+            if (maybeTriggerLeanVecTraining(fieldInfo, knnVectorValuesSupplier, totalLiveDocs) != null) {
+                ShardModelCache.CachedModel cached = ShardModelCache.getInstance(getShardId()).getCachedModel(fieldInfo.name);
+                if (cached != null) {
+                    shardModelBlob = cached.blobCopy();
+                    shardModelQualityOrdinal = cached.quality().ordinal();
+                }
+            }
         }
 
         final NativeIndexWriter writer = NativeIndexWriter.getWriter(
@@ -252,7 +263,7 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
 
         // If we trained or propagated a model, write it to the output segment file
         if (shardModelBlob != null) {
-            writeLeanVecModelToSegment(fieldInfo.getFieldNumber(), shardModelBlob);
+            writeLeanVecModelToSegment(fieldInfo.getFieldNumber(), shardModelBlob, shardModelQualityOrdinal);
         }
 
         long time_in_millis = stopWatch.stop().totalTime().millis();
@@ -353,78 +364,39 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
 
     // ---- Deferred LeanVec training helpers ----
 
-    /**
-     * Gets the final training threshold for deferred LeanVec training.
-     */
     private static int getFinalTrainingThreshold(FieldInfo fieldInfo) {
-        String val = fieldInfo.attributes().get(DEFERRED_TRAINING_THRESHOLD);
-        if (val == null) {
-            return DEFERRED_TRAINING_DEFAULT_THRESHOLD;
-        }
-        try {
-            int threshold = Integer.parseInt(val);
-            if (threshold < MIN_TRAINING_THRESHOLD) {
-                log.warn("Final training threshold {} below minimum {}, using minimum", threshold, MIN_TRAINING_THRESHOLD);
-                return MIN_TRAINING_THRESHOLD;
-            }
-            return threshold;
-        } catch (NumberFormatException e) {
-            log.warn("Invalid final training threshold '{}', using default {}", val, DEFERRED_TRAINING_DEFAULT_THRESHOLD);
-            return DEFERRED_TRAINING_DEFAULT_THRESHOLD;
-        }
+        return getIntAttribute(fieldInfo, DEFERRED_TRAINING_THRESHOLD,
+            DEFERRED_TRAINING_DEFAULT_THRESHOLD, MIN_TRAINING_THRESHOLD, "final training threshold");
     }
 
-    /**
-     * Gets the initial training threshold for two-threshold deferred LeanVec training.
-     * Falls back to DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD (10,000).
-     */
     private static int getInitialTrainingThreshold(FieldInfo fieldInfo) {
-        String val = fieldInfo.attributes().get(DEFERRED_TRAINING_INITIAL_THRESHOLD);
-        if (val == null) {
-            return DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD;
-        }
-        try {
-            int threshold = Integer.parseInt(val);
-            if (threshold < MIN_TRAINING_THRESHOLD) {
-                log.warn("Initial training threshold {} below minimum {}, using minimum", threshold, MIN_TRAINING_THRESHOLD);
-                return MIN_TRAINING_THRESHOLD;
-            }
-            return threshold;
-        } catch (NumberFormatException e) {
-            log.warn("Invalid initial training threshold '{}', using default {}", val, DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD);
-            return DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD;
-        }
+        return getIntAttribute(fieldInfo, DEFERRED_TRAINING_INITIAL_THRESHOLD,
+            DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD, MIN_TRAINING_THRESHOLD, "initial training threshold");
     }
 
-    /**
-     * Gets the target LeanVec dimensions.
-     */
     private static int getLeanVecDimensions(FieldInfo fieldInfo) {
-        String val = fieldInfo.attributes().get(DEFERRED_TRAINING_LEANVEC_DIMS);
-        if (val == null) {
-            return 0;
-        }
-        try {
-            return Integer.parseInt(val);
-        } catch (NumberFormatException e) {
-            log.warn("Invalid LeanVec dimensions '{}', returning 0", val);
-            return 0;
-        }
+        return getIntAttribute(fieldInfo, DEFERRED_TRAINING_LEANVEC_DIMS, 0, 0, "LeanVec dimensions");
     }
 
-    /**
-     * Gets the vector dimension from field attributes.
-     */
     private static int getDimension(FieldInfo fieldInfo) {
-        String val = fieldInfo.attributes().get(DIMENSION);
+        return getIntAttribute(fieldInfo, DIMENSION, 0, 0, "dimension");
+    }
+
+    private static int getIntAttribute(FieldInfo fieldInfo, String attribute, int defaultValue, int minValue, String label) {
+        String val = fieldInfo.attributes().get(attribute);
         if (val == null) {
-            return 0;
+            return defaultValue;
         }
         try {
-            return Integer.parseInt(val);
+            int parsed = Integer.parseInt(val);
+            if (parsed < minValue) {
+                log.warn("{} {} below minimum {}, using minimum", label, parsed, minValue);
+                return minValue;
+            }
+            return parsed;
         } catch (NumberFormatException e) {
-            log.warn("Invalid dimension '{}', returning 0", val);
-            return 0;
+            log.warn("Invalid {} '{}', using default {}", label, val, defaultValue);
+            return defaultValue;
         }
     }
 
@@ -591,10 +563,15 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
 
             long trainingMs = stopWatch.stop().totalTime().millis();
 
-            if (modelBlob != null && modelBlob.length > 0) {
+            if (modelBlob == TRAINING_INTERRUPTED) {
+                // Check sentinel first (reference identity) before length check
+                KNNCounter.DEFERRED_TRAINING_INTERRUPTED.increment();
+                log.info("[Merge] Training interrupted for field '{}', using fallback ({}ms)",
+                    fieldInfo.name, trainingMs);
+                return cache.getModel(fieldInfo.name);
+            } else if (modelBlob != null && modelBlob.length > 0) {
                 boolean stored = cache.putModel(fieldInfo.name, modelBlob, targetQuality);
                 if (!stored) {
-                    // Monotonicity guard rejected the store — another thread already upgraded
                     log.info("[Merge] Model store rejected (higher quality exists) for field '{}' — using cached",
                         fieldInfo.name);
                     return cache.getModel(fieldInfo.name);
@@ -608,12 +585,6 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
                         trainingMs, fieldInfo.name);
                 }
                 return modelBlob;
-            } else if (modelBlob == TRAINING_INTERRUPTED) {
-                KNNCounter.DEFERRED_TRAINING_INTERRUPTED.increment();
-                log.info("[Merge] Training interrupted for field '{}', using fallback ({}ms)",
-                    fieldInfo.name, trainingMs);
-                // Return existing model if we have one (INITIAL), else null (LVQ)
-                return cache.getModel(fieldInfo.name);
             } else {
                 cache.recordFailure(fieldInfo.name, targetQuality);
                 KNNCounter.DEFERRED_TRAINING_ERRORS.increment();
@@ -664,9 +635,9 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
      * The .knnlvm file is automatically tracked by Lucene's TrackingDirectoryWrapper
      * (same pattern as .faiss and .knnq files).
      */
-    private void writeLeanVecModelToSegment(int fieldNumber, byte[] modelBlob) throws IOException {
+    private void writeLeanVecModelToSegment(int fieldNumber, byte[] modelBlob, int qualityOrdinal) throws IOException {
         initLeanVecModelWriterIfNecessary();
-        leanVecModelWriter.writeModel(fieldNumber, modelBlob);
+        leanVecModelWriter.writeModel(fieldNumber, modelBlob, qualityOrdinal);
     }
 
     /**
@@ -754,7 +725,7 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
 
                 return modelBlob;
             }
-        } catch (IOException | IllegalStateException | IllegalArgumentException e) {
+        } catch (Exception e) {
             log.error("Failed to train LeanVec model for field {}: {}", fieldInfo.name, e.getMessage(), e);
             return null;
         } finally {

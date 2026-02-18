@@ -48,9 +48,6 @@ public final class ShardModelCache {
      * Use {@link #blobCopy()} when passing the blob outside the cache to prevent mutation.
      */
     public record CachedModel(byte[] blob, ModelQuality quality) {
-        /**
-         * Returns a defensive copy of the blob.
-         */
         public byte[] blobCopy() {
             return blob.clone();
         }
@@ -88,21 +85,6 @@ public final class ShardModelCache {
     }
 
     /**
-     * Removes and cleans up the cache for a shard by exact key (called on shard close).
-     */
-    public static void removeInstance(String shardId) {
-        ShardModelCache removed = INSTANCES.remove(shardId);
-        if (removed != null) {
-            removed.cachedModels.clear();
-            removed.trainingLocks.clear();
-            removed.failureCounts.clear();
-            removed.cumulativeVectorCounts.clear();
-            removed.counterSeeded.clear();
-            log.debug("Cleaned up ShardModelCache for shard {}", shardId);
-        }
-    }
-
-    /**
      * Removes cache entries whose filesystem-path key matches the given ShardId.
      * The key derived by NativeEngines990KnnVectorsWriter.getShardId() is a filesystem path
      * like "/data/nodes/0/indices/&lt;uuid&gt;/&lt;shard&gt;/index". This method matches on
@@ -127,42 +109,28 @@ public final class ShardModelCache {
 
     // ---- Model access ----
 
-    /**
-     * Returns the cached model entry, or null if not cached.
-     */
     public CachedModel getCachedModel(String fieldName) {
         return cachedModels.get(fieldName);
     }
 
-    /**
-     * Returns a defensive copy of the cached model blob, or null if not cached.
-     */
     public byte[] getModel(String fieldName) {
         CachedModel cached = cachedModels.get(fieldName);
         return cached != null ? cached.blobCopy() : null;
     }
 
     /**
-     * Returns the model quality for a field, or NONE if no model cached.
-     */
-    public ModelQuality getModelQuality(String fieldName) {
-        CachedModel cached = cachedModels.get(fieldName);
-        return cached != null ? cached.quality() : ModelQuality.NONE;
-    }
-
-    /**
-     * Stores a model blob in the cache. Rejects quality downgrades.
+     * Stores a model blob in the cache. Only accepts strict quality upgrades (NONE→INITIAL→FINAL).
      * Uses CAS loop for thread safety without external locking.
      *
-     * @return true if the model was stored, false if rejected (downgrade)
+     * @return true if the model was stored, false if rejected (same or lower quality)
      */
     public boolean putModel(String fieldName, byte[] modelBlob, ModelQuality quality) {
         byte[] cloned = modelBlob.clone();
         while (true) {
             CachedModel existing = cachedModels.get(fieldName);
             ModelQuality existingQuality = (existing != null) ? existing.quality() : ModelQuality.NONE;
-            if (!existingQuality.isUpgradeableTo(quality) && existingQuality != quality) {
-                log.warn("Rejecting model downgrade {} -> {} for field '{}'", existingQuality, quality, fieldName);
+            if (!existingQuality.isUpgradeableTo(quality)) {
+                log.debug("Rejecting model store {} -> {} for field '{}' (not an upgrade)", existingQuality, quality, fieldName);
                 return false;
             }
             CachedModel newModel = new CachedModel(cloned, quality);
@@ -182,27 +150,18 @@ public final class ShardModelCache {
         }
     }
 
-    /**
-     * Checks if a model exists for the given field.
-     */
     public boolean hasModel(String fieldName) {
         return cachedModels.containsKey(fieldName);
     }
 
     // ---- Training locks ----
 
-    /**
-     * Gets the per-field training lock.
-     */
     public ReentrantLock getTrainingLock(String fieldName) {
         return trainingLocks.computeIfAbsent(fieldName, k -> new ReentrantLock());
     }
 
     // ---- Per-quality circuit breaker ----
 
-    /**
-     * Records a training failure for a specific quality level.
-     */
     public void recordFailure(String fieldName, ModelQuality quality) {
         FailureKey key = new FailureKey(fieldName, quality);
         int count = failureCounts.merge(key, 1, Integer::sum);
@@ -213,16 +172,10 @@ public final class ShardModelCache {
         }
     }
 
-    /**
-     * Checks if training is suppressed for a specific quality level.
-     */
     public boolean isTrainingSuppressed(String fieldName, ModelQuality quality) {
         return failureCounts.getOrDefault(new FailureKey(fieldName, quality), 0) >= MAX_CONSECUTIVE_FAILURES;
     }
 
-    /**
-     * Clears failure counts on successful training and any lower-quality failures.
-     */
     private void clearFailuresOnSuccess(String fieldName, ModelQuality quality) {
         failureCounts.remove(new FailureKey(fieldName, quality));
         // When upgrading to FINAL, also clear stale INITIAL failures
@@ -231,41 +184,23 @@ public final class ShardModelCache {
         }
     }
 
-    // ---- Cumulative vector counting (for cumulative-threshold training) ----
+    // ---- Cumulative vector counting ----
 
-    /**
-     * Adds vectors to the cumulative count for a field. Called from flush() only
-     * to avoid double-counting from merges.
-     *
-     * @return the new cumulative count
-     */
+    /** Called from flush() only to avoid double-counting from merges. */
     public long addVectors(String fieldName, long count) {
         return cumulativeVectorCounts.computeIfAbsent(fieldName, k -> new AtomicLong(0))
             .addAndGet(count);
     }
 
-    /**
-     * Returns the current cumulative vector count for a field, or 0 if not tracked.
-     */
     public long getCumulativeVectorCount(String fieldName) {
         AtomicLong counter = cumulativeVectorCounts.get(fieldName);
         return counter != null ? counter.get() : 0;
     }
 
-    /**
-     * Seeds the counter from committed segment metadata on first merge after restart.
-     */
+    /** Seeds counter from committed segment metadata on first merge after restart. */
     public void seedVectorCount(String fieldName, long count) {
         cumulativeVectorCounts.computeIfAbsent(fieldName, k -> new AtomicLong(0))
             .addAndGet(count);
-    }
-
-    /**
-     * Checks whether the cumulative counter has been seeded for a field.
-     */
-    public boolean isCounterSeeded(String fieldName) {
-        AtomicBoolean flag = counterSeeded.get(fieldName);
-        return flag != null && flag.get();
     }
 
     /**
