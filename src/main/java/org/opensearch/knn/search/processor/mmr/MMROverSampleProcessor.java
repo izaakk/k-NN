@@ -288,10 +288,10 @@ public class MMROverSampleProcessor implements SearchRequestProcessor, SystemGen
 
     private void handleDisabledStoredFields(SearchRequest request, MMRRerankContext mmrContext, FetchSourceContext currentSourceContext) {
         if (currentSourceContext != null) {
-            // stored_fields = _none_ + explicit _source → invalid
+            // stored_fields = _none_ + explicit _source -> invalid
             throw new IllegalArgumentException("[stored_fields] cannot be disabled if [_source] is requested");
         }
-        // stored_fields = _none_ + no _source defined → temporarily enable _source
+        // stored_fields = _none_ + no _source defined -> temporarily enable _source
         mmrContext.setOriginalFetchSourceContext(new FetchSourceContext(false));
         request.source().storedFields(StoredFieldsContext.fromList(Collections.emptyList()));
         request.source().fetchSource(new FetchSourceContext(true));

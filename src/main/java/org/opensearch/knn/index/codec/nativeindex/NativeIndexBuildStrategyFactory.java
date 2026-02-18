@@ -8,6 +8,7 @@ package org.opensearch.knn.index.codec.nativeindex;
 import lombok.Setter;
 import org.apache.lucene.index.FieldInfo;
 import org.opensearch.index.IndexSettings;
+import org.opensearch.knn.common.KNNConstants;
 import org.opensearch.knn.index.codec.nativeindex.model.BuildIndexParams;
 import org.opensearch.knn.index.codec.nativeindex.remote.RemoteIndexBuildStrategy;
 import org.opensearch.knn.index.engine.KNNEngine;
@@ -58,7 +59,10 @@ public final class NativeIndexBuildStrategyFactory {
         BuildIndexParams indexInfo
     ) throws IOException {
         final KNNEngine knnEngine = extractKNNEngine(fieldInfo);
-        boolean isTemplate = fieldInfo.attributes().containsKey(MODEL_ID);
+        // Template path: explicit model_id in mapping, or shard model blob from deferred training
+        boolean isTemplate = fieldInfo.attributes().containsKey(MODEL_ID)
+            || indexInfo.getParameters().containsKey(MODEL_ID)
+            || indexInfo.getParameters().containsKey(KNNConstants.SHARD_MODEL_BLOB_PARAMETER);
         boolean iterative = !isTemplate && KNNEngine.FAISS == knnEngine;
 
         NativeIndexBuildStrategy strategy = iterative
