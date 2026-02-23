@@ -75,7 +75,8 @@ final class DefaultIndexBuildStrategy implements NativeIndexBuildStrategy {
 
             final Map<String, Object> params = indexInfo.getParameters();
             long vectorAddress = vectorTransfer.getVectorAddress();
-            // Template-based path: either explicit MODEL_ID or deferred training shard model blob
+            // Currently this is if else as there are only two cases, with more cases this will have to be made
+            // more maintainable
             if (params.containsKey(MODEL_ID) || params.containsKey(KNNConstants.SHARD_MODEL_BLOB_PARAMETER)) {
                 final byte[] templateBlob = params.containsKey(KNNConstants.SHARD_MODEL_BLOB_PARAMETER)
                     ? (byte[]) params.get(KNNConstants.SHARD_MODEL_BLOB_PARAMETER)

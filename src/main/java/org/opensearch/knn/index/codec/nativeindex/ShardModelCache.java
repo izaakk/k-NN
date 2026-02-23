@@ -29,10 +29,7 @@ public final class ShardModelCache {
         INITIAL,  // Rough model from initial_threshold vectors
         FINAL;    // Production model from final_threshold vectors
 
-        /**
-         * Returns true if this quality can be upgraded to the target quality.
-         * Transitions are monotonic: NONE->INITIAL, NONE->FINAL, INITIAL->FINAL.
-         */
+        /** Returns true if this quality can be upgraded to the target quality. */
         public boolean isUpgradeableTo(ModelQuality target) {
             return this.ordinal() < target.ordinal();
         }
@@ -54,7 +51,7 @@ public final class ShardModelCache {
     /** Global registry: shardId -> ShardModelCache */
     private static final ConcurrentHashMap<String, ShardModelCache> INSTANCES = new ConcurrentHashMap<>();
 
-    /** Per-field cached models: fieldName -> CachedModel (atomic blob + quality) */
+    /** Per-field cached models: fieldName -> CachedModel */
     private final ConcurrentHashMap<String, CachedModel> cachedModels = new ConcurrentHashMap<>();
 
     /** Per-field training locks: fieldName -> lock */
@@ -65,9 +62,6 @@ public final class ShardModelCache {
 
     /**
      * Gets (or creates) the cache for a given shard.
-     *
-     * @param shardId unique shard identifier (e.g., "[index][0]")
-     * @return the ShardModelCache for this shard
      */
     public static ShardModelCache getInstance(String shardId) {
         return INSTANCES.computeIfAbsent(shardId, k -> new ShardModelCache());
@@ -88,11 +82,6 @@ public final class ShardModelCache {
 
     /**
      * Removes cache entries whose filesystem-path key matches the given ShardId.
-     * The key derived by NativeEngines990KnnVectorsWriter.getShardId() is a filesystem path
-     * like "/data/nodes/0/indices/&lt;uuid&gt;/&lt;shard&gt;/index". This method matches on
-     * "/indices/&lt;uuid&gt;/&lt;shard_number&gt;/" to find the right entry.
-     *
-     * @param shardId the OpenSearch ShardId from the shard close event
      */
     public static void removeInstancesForShard(org.opensearch.core.index.shard.ShardId shardId) {
         String pattern = "/indices/" + shardId.getIndex().getUUID() + "/" + shardId.id() + "/";

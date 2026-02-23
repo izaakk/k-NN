@@ -88,14 +88,28 @@ public class NativeIndexWriter {
     }
 
     /**
-     * Gets the correct writer type from fieldInfo (no quantization, no shard model)
+     * Gets the correct writer type from fieldInfo
+     *
+     * @param fieldInfo
+     * @return correct NativeIndexWriter to make index specified in fieldInfo
      */
     public static NativeIndexWriter getWriter(final FieldInfo fieldInfo, SegmentWriteState state) {
         return createWriter(fieldInfo, state, null, new NativeIndexBuildStrategyFactory(), null);
     }
 
     /**
-     * Gets the correct writer type with quantization state (no shard model).
+     * Gets the correct writer type for the specified field, using a given QuantizationModel.
+     *
+     * This method returns a NativeIndexWriter instance that is tailored to the specific characteristics
+     * of the field described by the provided FieldInfo. It determines whether to use a template-based
+     * writer or an iterative approach based on the engine type and whether the field is associated with a template.
+     *
+     * If quantization is required, the QuantizationModel is passed to the writer to facilitate the quantization process.
+     *
+     * @param fieldInfo          The FieldInfo object containing metadata about the field for which the writer is needed.
+     * @param state              The SegmentWriteState representing the current segment's writing context.
+     * @param quantizationState  The QuantizationState that contains  quantization state required for quantization
+     * @return                   A NativeIndexWriter instance appropriate for the specified field, configured with or without quantization.
      */
     public static NativeIndexWriter getWriter(
         final FieldInfo fieldInfo,
@@ -121,6 +135,9 @@ public class NativeIndexWriter {
 
     /**
      * flushes the index
+     *
+     * @param knnVectorValuesSupplier
+     * @throws IOException
      */
     public void flushIndex(final Supplier<KNNVectorValues<?>> knnVectorValuesSupplier, int totalLiveDocs) throws IOException {
         buildAndWriteIndex(knnVectorValuesSupplier, totalLiveDocs, true);
@@ -129,11 +146,14 @@ public class NativeIndexWriter {
 
     /**
      * Merges kNN index
+     * @param knnVectorValuesSupplier
+     * @throws IOException
      */
     public void mergeIndex(final Supplier<KNNVectorValues<?>> knnVectorValuesSupplier, int totalLiveDocs) throws IOException {
         KNNVectorValues<?> knnVectorValues = knnVectorValuesSupplier.get();
         initializeVectorValues(knnVectorValues);
         if (knnVectorValues.docId() == NO_MORE_DOCS) {
+            // This is in place so we do not add metrics
             log.debug("Skipping mergeIndex, vector values are already iterated for {}", fieldInfo.name);
             return;
         }
@@ -434,6 +454,13 @@ public class NativeIndexWriter {
 
     /**
      * Helper method to create the appropriate NativeIndexWriter based on the field info and quantization state.
+     *
+     * @param fieldInfo          The FieldInfo object containing metadata about the field for which the writer is needed.
+     * @param state              The SegmentWriteState representing the current segment's writing context.
+     * @param quantizationState  The QuantizationState that contains quantization state required for quantization, can be null.
+     * @param nativeIndexBuildStrategyFactory The factory which will return the correct {@link NativeIndexBuildStrategy} implementation
+     * @param shardModelBlob     The shard model blob for deferred training, can be null.
+     * @return                   A NativeIndexWriter instance appropriate for the specified field, configured with or without quantization.
      */
     private static NativeIndexWriter createWriter(
         final FieldInfo fieldInfo,
