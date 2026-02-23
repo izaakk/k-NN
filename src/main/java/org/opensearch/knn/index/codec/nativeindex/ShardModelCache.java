@@ -8,22 +8,12 @@ package org.opensearch.knn.index.codec.nativeindex;
 import lombok.extern.log4j.Log4j2;
 
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * In-memory cache for LeanVec model blobs, scoped to a shard.
- *
- * Provides:
- * - O(1) model lookup during flush (avoids re-reading segment files)
- * - Atomic model+quality storage via CachedModel record
- * - Monotonic quality upgrades: NONE->INITIAL->FINAL
- * - Per-field per-quality circuit breaker
- * - Per-field training locks (prevents concurrent training races)
- *
- * Lifecycle: created per-shard, cleaned up via KNNPlugin.onIndexModule() ->
- * IndexEventListener.afterIndexShardClosed().
+ * Per-shard cache for LeanVec models. Ensures monotonic quality upgrades
+ * (NONE->INITIAL->FINAL) and prevents concurrent training races.
+ * Cleaned up on shard close via IndexEventListener.
  */
 @Log4j2
 public final class ShardModelCache {
@@ -48,11 +38,8 @@ public final class ShardModelCache {
         }
     }
 
-    /** Model blob with quality level. Atomic storage for thread-safe reads. Use blobCopy() for external access. */
+    /** Model blob with quality level. Use blobCopy() for external access. */
     public record CachedModel(byte[] blob, ModelQuality quality) {
-        /**
-         * Returns a defensive copy of the blob.
-         */
         public byte[] blobCopy() {
             return blob.clone();
         }
@@ -76,12 +63,6 @@ public final class ShardModelCache {
     /** Per-field per-quality consecutive failure counts */
     private final ConcurrentHashMap<FailureKey, Integer> failureCounts = new ConcurrentHashMap<>();
 
-    /** Per-field cumulative vector counts: fieldName -> count (incremented on flush only, not merge) */
-    private final ConcurrentHashMap<String, AtomicLong> cumulativeVectorCounts = new ConcurrentHashMap<>();
-
-    /** Per-field counter-seeded flags: fieldName -> seeded (explicit flag to handle flush-before-merge race) */
-    private final ConcurrentHashMap<String, AtomicBoolean> counterSeeded = new ConcurrentHashMap<>();
-
     /**
      * Gets (or creates) the cache for a given shard.
      *
@@ -101,8 +82,6 @@ public final class ShardModelCache {
             removed.cachedModels.clear();
             removed.trainingLocks.clear();
             removed.failureCounts.clear();
-            removed.cumulativeVectorCounts.clear();
-            removed.counterSeeded.clear();
             log.debug("Cleaned up ShardModelCache for shard {}", shardId);
         }
     }
@@ -123,8 +102,6 @@ public final class ShardModelCache {
                 cache.cachedModels.clear();
                 cache.trainingLocks.clear();
                 cache.failureCounts.clear();
-                cache.cumulativeVectorCounts.clear();
-                cache.counterSeeded.clear();
                 log.debug("Cleaned up ShardModelCache for shard {} (key: {})", shardId, entry.getKey());
                 return true;
             }
@@ -134,33 +111,16 @@ public final class ShardModelCache {
 
     // ---- Model access ----
 
-    /**
-     * Gets the cached model entry (blob + quality) for a field.
-     * Returns null if no model is cached.
-     * The returned CachedModel is immutable; call blobCopy() for a defensive copy.
-     */
     public CachedModel getCachedModel(String fieldName) {
         return cachedModels.get(fieldName);
     }
 
-    /**
-     * Gets a cached model blob for a field.
-     * Returns a defensive copy to prevent JNI-layer mutation of the cached model.
-     *
-     * @param fieldName the vector field name
-     * @return a copy of the model blob, or null if not cached
-     */
+    /** Returns a defensive copy of the model blob, or null if not cached. */
     public byte[] getModel(String fieldName) {
         CachedModel cached = cachedModels.get(fieldName);
         return cached != null ? cached.blobCopy() : null;
     }
 
-    /**
-     * Gets the model quality for a field.
-     *
-     * @param fieldName the vector field name
-     * @return the model quality, or NONE if no model cached
-     */
     public ModelQuality getModelQuality(String fieldName) {
         CachedModel cached = cachedModels.get(fieldName);
         return cached != null ? cached.quality() : ModelQuality.NONE;
@@ -202,27 +162,18 @@ public final class ShardModelCache {
         }
     }
 
-    /**
-     * Checks if a model exists for the given field.
-     */
     public boolean hasModel(String fieldName) {
         return cachedModels.containsKey(fieldName);
     }
 
     // ---- Training locks ----
 
-    /**
-     * Gets the per-field training lock.
-     */
     public ReentrantLock getTrainingLock(String fieldName) {
         return trainingLocks.computeIfAbsent(fieldName, k -> new ReentrantLock());
     }
 
     // ---- Per-quality circuit breaker ----
 
-    /**
-     * Records a training failure for a specific quality level.
-     */
     public void recordFailure(String fieldName, ModelQuality quality) {
         FailureKey key = new FailureKey(fieldName, quality);
         int count = failureCounts.merge(key, 1, Integer::sum);
@@ -233,9 +184,6 @@ public final class ShardModelCache {
         }
     }
 
-    /**
-     * Checks if training is suppressed for a specific quality level.
-     */
     public boolean isTrainingSuppressed(String fieldName, ModelQuality quality) {
         return failureCounts.getOrDefault(new FailureKey(fieldName, quality), 0) >= MAX_CONSECUTIVE_FAILURES;
     }
@@ -252,66 +200,4 @@ public final class ShardModelCache {
         }
     }
 
-    // ---- Cumulative vector counting (for cumulative-threshold training) ----
-
-    /**
-     * Adds vectors to the cumulative count for a field. Called from flush() only
-     * to avoid double-counting from merges (see Devil's Advocate Failure Mode 2).
-     *
-     * @param fieldName the vector field name
-     * @param count     the number of vectors to add
-     * @return the new cumulative count
-     */
-    public long addVectors(String fieldName, long count) {
-        return cumulativeVectorCounts.computeIfAbsent(fieldName, k -> new AtomicLong(0))
-            .addAndGet(count);
-    }
-
-    /**
-     * Gets the current cumulative vector count for a field.
-     *
-     * @param fieldName the vector field name
-     * @return the cumulative count, or 0 if not tracked
-     */
-    public long getCumulativeVectorCount(String fieldName) {
-        AtomicLong counter = cumulativeVectorCounts.get(fieldName);
-        return counter != null ? counter.get() : 0;
-    }
-
-    /**
-     * Seeds the counter from committed segment metadata. Used on first merge after restart
-     * to avoid a long LVQ fallback window.
-     *
-     * @param fieldName the vector field name
-     * @param count     the total number of vectors from committed segments
-     */
-    public void seedVectorCount(String fieldName, long count) {
-        cumulativeVectorCounts.computeIfAbsent(fieldName, k -> new AtomicLong(0))
-            .addAndGet(count);
-    }
-
-    /**
-     * Checks whether the cumulative counter has been seeded for a field.
-     * Uses explicit flag (not counter value) to handle flush-before-merge race.
-     *
-     * @param fieldName the vector field name
-     * @return true if the counter has been seeded
-     */
-    public boolean isCounterSeeded(String fieldName) {
-        AtomicBoolean flag = counterSeeded.get(fieldName);
-        return flag != null && flag.get();
-    }
-
-    /**
-     * Atomically marks the counter as seeded using CAS, returning true only if this call
-     * transitioned the flag from false to true. Prevents double-seeding race between
-     * afterIndexShardStarted and seedCounterFromCommittedSegments.
-     *
-     * @param fieldName the vector field name
-     * @return true if this call won the race and the caller should seed; false if already seeded
-     */
-    public boolean tryMarkCounterSeeded(String fieldName) {
-        return counterSeeded.computeIfAbsent(fieldName, k -> new AtomicBoolean(false))
-            .compareAndSet(false, true);
-    }
 }

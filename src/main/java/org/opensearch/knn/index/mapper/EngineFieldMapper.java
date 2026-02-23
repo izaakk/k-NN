@@ -27,6 +27,8 @@ import org.opensearch.knn.index.engine.MethodComponentContext;
 import org.opensearch.knn.index.engine.qframe.QuantizationConfig;
 import org.opensearch.knn.index.engine.qframe.QuantizationConfigParser;
 
+import lombok.extern.log4j.Log4j2;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -57,7 +59,7 @@ import static org.opensearch.knn.index.mapper.KNNVectorFieldMapperUtil.createSto
 /**
  *  Field mapper for all supported engines.
  */
-@lombok.extern.log4j.Log4j2
+@Log4j2
 public class EngineFieldMapper extends KNNVectorFieldMapper {
 
     private final FieldType vectorFieldType;
@@ -350,9 +352,9 @@ public class EngineFieldMapper extends KNNVectorFieldMapper {
         if (initialThreshold > finalThreshold) {
             log.warn("initial_training_threshold ({}) > training_threshold ({}), swapping values",
                 initialThreshold, finalThreshold);
-            int temp = initialThreshold;
+            int swap = initialThreshold;
             initialThreshold = finalThreshold;
-            finalThreshold = temp;
+            finalThreshold = swap;
         }
         this.fieldType.putAttribute(DEFERRED_TRAINING_THRESHOLD, String.valueOf(finalThreshold));
         this.fieldType.putAttribute(DEFERRED_TRAINING_INITIAL_THRESHOLD, String.valueOf(initialThreshold));

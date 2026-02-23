@@ -18,8 +18,6 @@ import org.apache.lucene.codecs.hnsw.FlatVectorsWriter;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.KnnVectorValues;
 import org.apache.lucene.index.MergeState;
-import org.apache.lucene.index.SegmentCommitInfo;
-import org.apache.lucene.index.SegmentInfos;
 import org.apache.lucene.index.SegmentWriteState;
 import org.apache.lucene.index.Sorter;
 import org.apache.lucene.search.DocIdSetIterator;
@@ -145,15 +143,6 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
                 field.getFlatFieldVectorsWriter().getDocsWithFieldSet(),
                 field.getVectors()
             );
-            // Count vectors for cumulative threshold BEFORE shouldSkipBuildingVectorDataStructure.
-            // Small flushes must still be counted even when graph building is skipped.
-            if (isDeferredLeanVecEnabled(fieldInfo)) {
-                String shardId = getShardId();
-                ShardModelCache cache = ShardModelCache.getInstance(shardId);
-                long cumulative = cache.addVectors(fieldInfo.name, totalLiveDocs);
-                log.info("[Flush] Counted {} vectors for field '{}', cumulative={}", totalLiveDocs, fieldInfo.name, cumulative);
-            }
-
             final QuantizationState quantizationState = train(field.getFieldInfo(), knnVectorValuesSupplier, totalLiveDocs);
             // should skip graph building only for non quantization use case and if threshold is met
             if (quantizationState == null && shouldSkipBuildingVectorDataStructure(totalLiveDocs)) {
@@ -166,19 +155,17 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
                 continue;
             }
 
-            // Load model from shard cache for flush (post-training segments use LeanVec)
             byte[] shardModelBlob = null;
             if (isDeferredLeanVecEnabled(fieldInfo)) {
                 String shardId = getShardId();
                 ShardModelCache cache = ShardModelCache.getInstance(shardId);
-                // Single atomic read of blob+quality to avoid race between getModel/getModelQuality
                 ShardModelCache.CachedModel cached = cache.getCachedModel(fieldInfo.name);
                 if (cached != null) {
                     shardModelBlob = cached.blobCopy();
-                    log.info("[Flush] Encoding=LeanVec ({} model) for field '{}' ({} vectors, segment={})",
+                    log.debug("[Flush] Encoding=LeanVec ({} model) for field '{}' ({} vectors, segment={})",
                         cached.quality(), fieldInfo.name, totalLiveDocs, segmentWriteState.segmentInfo.name);
                 } else {
-                    log.info("[Flush] Encoding=LVQ (no trained model) for field '{}' ({} vectors, segment={})",
+                    log.debug("[Flush] Encoding=LVQ (no trained model) for field '{}' ({} vectors, segment={})",
                         fieldInfo.name, totalLiveDocs, segmentWriteState.segmentInfo.name);
                 }
             }
@@ -194,7 +181,6 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
             StopWatch stopWatch = new StopWatch().start();
             writer.flushIndex(knnVectorValuesSupplier, totalLiveDocs);
 
-            // Persist model blob to segment file during flush so it survives node restart
             if (shardModelBlob != null) {
                 writeLeanVecModelToSegment(fieldInfo.getFieldNumber(), shardModelBlob);
             }
@@ -234,7 +220,6 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
             return;
         }
 
-        // Deferred LeanVec training: check if we should train or reuse existing model
         byte[] shardModelBlob = null;
         if (isDeferredLeanVecEnabled(fieldInfo)) {
             shardModelBlob = maybeTriggerLeanVecTraining(fieldInfo, knnVectorValuesSupplier, totalLiveDocs);
@@ -252,7 +237,6 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
 
         writer.mergeIndex(knnVectorValuesSupplier, totalLiveDocs);
 
-        // If we trained or propagated a model, write it to the output segment file
         if (shardModelBlob != null) {
             writeLeanVecModelToSegment(fieldInfo.getFieldNumber(), shardModelBlob);
         }
@@ -282,9 +266,6 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
 
     @Override
     public void close() throws IOException {
-        // Use IOUtils.close() to ensure all resources are released even if
-        // earlier closes throw. LeanVecModelWriter implements Closeable. Wrap quantization
-        // state writer's closeOutput in a Closeable lambda since it doesn't implement Closeable.
         java.io.Closeable quantizationCloseable = quantizationStateWriter != null
             ? () -> quantizationStateWriter.closeOutput()
             : null;
@@ -321,12 +302,12 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
 
     /**
      * The {@link KNNVectorValues} will be exhausted after this function run. So make sure that you are not sending the
-     * vectorsValues object which you plan to use later.
-     *
-     * Note: The knnVectorValuesSupplier passed to training and index building must produce independent iterators
-     * that can be consumed separately (each call to .get() returns a fresh iterator).
+     * vectorsValues object which you plan to use later
      */
     private int getLiveDocs(KNNVectorValues<?> vectorValues) throws IOException {
+        // Count all the live docs as there vectorValues.totalLiveDocs() just gives the cost for the FloatVectorValues,
+        // and doesn't tell the correct number of docs, if there are deleted docs in the segment. So we are counting
+        // the total live docs here.
         int liveDocs = 0;
         while (vectorValues.nextDoc() != DocIdSetIterator.NO_MORE_DOCS) {
             liveDocs++;
@@ -358,78 +339,42 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
     // ---- Deferred LeanVec training helpers ----
 
     /**
-     * Gets the final training threshold for deferred LeanVec training (W6: NumberFormatException safety, S9: min threshold).
+     * Parses an integer field attribute with a default fallback and optional minimum enforcement.
      */
+    private static int getIntAttribute(FieldInfo fieldInfo, String attrName, int defaultValue, int minValue, String label) {
+        String val = fieldInfo.attributes().get(attrName);
+        if (val == null) {
+            return defaultValue;
+        }
+        try {
+            int parsed = Integer.parseInt(val);
+            if (minValue > 0 && parsed < minValue) {
+                log.warn("{} {} below minimum {}, using minimum", label, parsed, minValue);
+                return minValue;
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            log.warn("Invalid {} '{}', using default {}", label, val, defaultValue);
+            return defaultValue;
+        }
+    }
+
     private static int getFinalTrainingThreshold(FieldInfo fieldInfo) {
-        String val = fieldInfo.attributes().get(DEFERRED_TRAINING_THRESHOLD);
-        if (val == null) {
-            return DEFERRED_TRAINING_DEFAULT_THRESHOLD;
-        }
-        try {
-            int threshold = Integer.parseInt(val);
-            if (threshold < MIN_TRAINING_THRESHOLD) {
-                log.warn("Final training threshold {} below minimum {}, using minimum", threshold, MIN_TRAINING_THRESHOLD);
-                return MIN_TRAINING_THRESHOLD;
-            }
-            return threshold;
-        } catch (NumberFormatException e) {
-            log.warn("Invalid final training threshold '{}', using default {}", val, DEFERRED_TRAINING_DEFAULT_THRESHOLD);
-            return DEFERRED_TRAINING_DEFAULT_THRESHOLD;
-        }
+        return getIntAttribute(fieldInfo, DEFERRED_TRAINING_THRESHOLD,
+            DEFERRED_TRAINING_DEFAULT_THRESHOLD, MIN_TRAINING_THRESHOLD, "final training threshold");
     }
 
-    /**
-     * Gets the initial training threshold for two-threshold deferred LeanVec training.
-     * Falls back to DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD (10,000).
-     */
     private static int getInitialTrainingThreshold(FieldInfo fieldInfo) {
-        String val = fieldInfo.attributes().get(DEFERRED_TRAINING_INITIAL_THRESHOLD);
-        if (val == null) {
-            return DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD;
-        }
-        try {
-            int threshold = Integer.parseInt(val);
-            if (threshold < MIN_TRAINING_THRESHOLD) {
-                log.warn("Initial training threshold {} below minimum {}, using minimum", threshold, MIN_TRAINING_THRESHOLD);
-                return MIN_TRAINING_THRESHOLD;
-            }
-            return threshold;
-        } catch (NumberFormatException e) {
-            log.warn("Invalid initial training threshold '{}', using default {}", val, DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD);
-            return DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD;
-        }
+        return getIntAttribute(fieldInfo, DEFERRED_TRAINING_INITIAL_THRESHOLD,
+            DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD, MIN_TRAINING_THRESHOLD, "initial training threshold");
     }
 
-    /**
-     * Gets the target LeanVec dimensions (W6: NumberFormatException safety).
-     */
     private static int getLeanVecDimensions(FieldInfo fieldInfo) {
-        String val = fieldInfo.attributes().get(DEFERRED_TRAINING_LEANVEC_DIMS);
-        if (val == null) {
-            return 0;
-        }
-        try {
-            return Integer.parseInt(val);
-        } catch (NumberFormatException e) {
-            log.warn("Invalid LeanVec dimensions '{}', returning 0", val);
-            return 0;
-        }
+        return getIntAttribute(fieldInfo, DEFERRED_TRAINING_LEANVEC_DIMS, 0, 0, "LeanVec dimensions");
     }
 
-    /**
-     * Gets the vector dimension from field attributes (W6: NumberFormatException safety).
-     */
     private static int getDimension(FieldInfo fieldInfo) {
-        String val = fieldInfo.attributes().get(DIMENSION);
-        if (val == null) {
-            return 0;
-        }
-        try {
-            return Integer.parseInt(val);
-        } catch (NumberFormatException e) {
-            log.warn("Invalid dimension '{}', returning 0", val);
-            return 0;
-        }
+        return getIntAttribute(fieldInfo, DIMENSION, 0, 0, "dimension");
     }
 
     /**
@@ -437,15 +382,6 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
      *
      * State machine: NONE -> INITIAL (10K vectors) -> FINAL (100K vectors).
      * Returns the model blob to use for this merge, or null for LVQ fallback.
-     *
-     * Decision tree:
-     * - FINAL model cached -> use it
-     * - INITIAL model cached + merge >= final_threshold -> retrain as FINAL
-     * - INITIAL model cached + merge < final_threshold -> use INITIAL
-     * - No model + cumulative < initial_threshold -> LVQ (not enough vectors yet)
-     * - No model + merge >= final_threshold -> train FINAL directly (skip INITIAL)
-     * - No model + merge >= initial_threshold -> train INITIAL
-     * - No model + merge < initial_threshold -> LVQ (wait for bigger merge)
      */
     private byte[] maybeTriggerLeanVecTraining(
         FieldInfo fieldInfo,
@@ -457,58 +393,36 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
         int initialThreshold = getInitialTrainingThreshold(fieldInfo);
         int finalThreshold = getFinalTrainingThreshold(fieldInfo);
 
-        // 1. Read cached model — single atomic read
         ShardModelCache.CachedModel cached = cache.getCachedModel(fieldInfo.name);
         ShardModelCache.ModelQuality quality = (cached != null) ? cached.quality() : ShardModelCache.ModelQuality.NONE;
 
-        // 2. FINAL model exists — always use it
         if (quality == ShardModelCache.ModelQuality.FINAL) {
-            log.info("[Merge] Encoding=LeanVec (FINAL model) for field '{}' ({} vectors, segment={})",
+            log.debug("[Merge] Encoding=LeanVec (FINAL model) for field '{}' ({} vectors, segment={})",
                 fieldInfo.name, totalLiveDocs, segmentWriteState.segmentInfo.name);
             return cached.blobCopy();
         }
 
-        // 3. INITIAL model exists — check if this merge can upgrade to FINAL
         if (quality == ShardModelCache.ModelQuality.INITIAL) {
             if (totalLiveDocs >= finalThreshold) {
-                // This merge is large enough to train the FINAL model
                 return tryTrainModel(fieldInfo, knnVectorValuesSupplier, totalLiveDocs, cache,
                     ShardModelCache.ModelQuality.FINAL, finalThreshold);
             }
-            // Merge too small to upgrade — use existing INITIAL model
-            log.info("[Merge] Encoding=LeanVec (INITIAL model) for field '{}' ({} vectors, segment={})",
+            log.debug("[Merge] Encoding=LeanVec (INITIAL model) for field '{}' ({} vectors, segment={})",
                 fieldInfo.name, totalLiveDocs, segmentWriteState.segmentInfo.name);
             return cached.blobCopy();
         }
 
-        // 4. No model yet — seed counter on first merge after restart
-        if (cache.tryMarkCounterSeeded(fieldInfo.name)) {
-            seedCounterFromCommittedSegments(fieldInfo, cache);
-        }
-
-        // 5. Cumulative threshold check — need enough total vectors before training
-        long cumulativeCount = cache.getCumulativeVectorCount(fieldInfo.name);
-        if (cumulativeCount < initialThreshold) {
-            log.info("[Merge] Encoding=LVQ (cumulative {} < initial threshold {}) for field '{}' ({} vectors, segment={})",
-                cumulativeCount, initialThreshold, fieldInfo.name, totalLiveDocs,
-                segmentWriteState.segmentInfo.name);
-            return null;
-        }
-
-        // 6. Cumulative threshold met — determine which model to train based on merge size
+        // No model yet — determine which to train based on merge size
         if (totalLiveDocs >= finalThreshold) {
-            // Skip INITIAL, go straight to FINAL
             return tryTrainModel(fieldInfo, knnVectorValuesSupplier, totalLiveDocs, cache,
                 ShardModelCache.ModelQuality.FINAL, finalThreshold);
         }
         if (totalLiveDocs >= initialThreshold) {
-            // Train INITIAL model
             return tryTrainModel(fieldInfo, knnVectorValuesSupplier, totalLiveDocs, cache,
                 ShardModelCache.ModelQuality.INITIAL, initialThreshold);
         }
 
-        // 7. Merge too small for either threshold
-        log.info("[Merge] Encoding=LVQ (merge {} < initial threshold {}) for field '{}' (segment={})",
+        log.debug("[Merge] Encoding=LVQ (merge {} < initial threshold {}) for field '{}' (segment={})",
             totalLiveDocs, initialThreshold, fieldInfo.name, segmentWriteState.segmentInfo.name);
         return null;
     }
@@ -533,11 +447,9 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
         ShardModelCache.ModelQuality targetQuality,
         int threshold
     ) throws IOException {
-        // Circuit breaker check
         if (cache.isTrainingSuppressed(fieldInfo.name, targetQuality)) {
             log.warn("[Merge] {} training suppressed by circuit breaker for field '{}' — using fallback",
                 targetQuality, fieldInfo.name);
-            // Return existing model if available (INITIAL), else null (LVQ)
             return cache.getModel(fieldInfo.name);
         }
         if (KNNSettings.isCircuitBreakerTriggered()) {
@@ -546,7 +458,6 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
             return cache.getModel(fieldInfo.name);
         }
 
-        // Acquire training lock (non-blocking, 100ms timeout)
         ReentrantLock lock = cache.getTrainingLock(fieldInfo.name);
         boolean acquired;
         try {
@@ -557,34 +468,30 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
             return cache.getModel(fieldInfo.name);
         }
         if (!acquired) {
-            // Another merge is training — use existing model if available, else LVQ
             byte[] existing = cache.getModel(fieldInfo.name);
             if (existing != null) {
-                log.info("[Merge] Encoding=LeanVec (lock busy, using existing model) for field '{}' (segment={})",
+                log.debug("[Merge] Encoding=LeanVec (lock busy, using existing model) for field '{}' (segment={})",
                     fieldInfo.name, segmentWriteState.segmentInfo.name);
                 return existing;
             }
-            log.info("[Merge] Encoding=LVQ (training lock busy) for field '{}' (segment={})",
+            log.debug("[Merge] Encoding=LVQ (training lock busy) for field '{}' (segment={})",
                 fieldInfo.name, segmentWriteState.segmentInfo.name);
             return null;
         }
 
         try {
-            // Double-check: model may have been upgraded while waiting for lock
-            // Single atomic read — no torn state possible
+            // Re-check after lock acquisition
             ShardModelCache.CachedModel current = cache.getCachedModel(fieldInfo.name);
             ShardModelCache.ModelQuality currentQuality =
                 (current != null) ? current.quality() : ShardModelCache.ModelQuality.NONE;
             if (!currentQuality.isUpgradeableTo(targetQuality)) {
-                // Already at or above target quality
                 if (current != null) {
-                    log.info("[Merge] Encoding=LeanVec ({} model, upgraded while waiting) for field '{}' (segment={})",
+                    log.debug("[Merge] Encoding=LeanVec ({} model, upgraded while waiting) for field '{}' (segment={})",
                         currentQuality, fieldInfo.name, segmentWriteState.segmentInfo.name);
                     return current.blobCopy();
                 }
             }
 
-            // Train — increment both aggregate and per-quality counters
             KNNCounter.DEFERRED_TRAINING_REQUESTS.increment();
             incrementQualityCounter(targetQuality, true, false);
             StopWatch stopWatch = new StopWatch().start();
@@ -599,8 +506,7 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
             if (modelBlob != null && modelBlob.length > 0) {
                 boolean stored = cache.putModel(fieldInfo.name, modelBlob, targetQuality);
                 if (!stored) {
-                    // Monotonicity guard rejected the store — another thread already upgraded
-                    log.info("[Merge] Model store rejected (higher quality exists) for field '{}' — using cached",
+                    log.debug("[Merge] Model store rejected (higher quality exists) for field '{}' — using cached",
                         fieldInfo.name);
                     return cache.getModel(fieldInfo.name);
                 }
@@ -615,9 +521,8 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
                 return modelBlob;
             } else if (modelBlob == TRAINING_INTERRUPTED) {
                 KNNCounter.DEFERRED_TRAINING_INTERRUPTED.increment();
-                log.info("[Merge] Training interrupted for field '{}', using fallback ({}ms)",
+                log.debug("[Merge] Training interrupted for field '{}', using fallback ({}ms)",
                     fieldInfo.name, trainingMs);
-                // Return existing model if we have one (INITIAL), else null (LVQ)
                 return cache.getModel(fieldInfo.name);
             } else {
                 cache.recordFailure(fieldInfo.name, targetQuality);
@@ -625,7 +530,6 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
                 incrementQualityCounter(targetQuality, false, false);
                 log.warn("[Merge] TRAINING FAILED ({}, {}ms): fallback for field '{}' (segment={})",
                     targetQuality, trainingMs, fieldInfo.name, segmentWriteState.segmentInfo.name);
-                // Return existing model if we have one (INITIAL), else null (LVQ)
                 return cache.getModel(fieldInfo.name);
             }
         } finally {
@@ -661,19 +565,7 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
         }
     }
 
-    // NOTE: After node restart, the ShardModelCache is warmed by KNNPlugin.afterIndexShardStarted()
-    // which loads models from .knnlvm segment files and seeds the cumulative counter.
-    // This eliminates the LVQ fallback window after restart.
-
-    /**
-     * Writes a LeanVec model blob to the output segment file.
-     *
-     * The .knnlvm file is automatically tracked by Lucene's TrackingDirectoryWrapper
-     * because it is created via segmentWriteState.directory.createOutput() in LeanVecModelWriter.
-     * After the codec finishes, IndexWriter calls si.setFiles(wrapper.getCreatedFiles()) which
-     * includes our file. This is the same pattern used by engine files (.faiss) and quantization
-     * state files (.knnq) — none of them call segmentInfo.addFile() explicitly.
-     */
+    /** Writes a LeanVec model blob to the output segment's .knnlvm file. */
     private void writeLeanVecModelToSegment(int fieldNumber, byte[] modelBlob) throws IOException {
         initLeanVecModelWriterIfNecessary();
         leanVecModelWriter.writeModel(fieldNumber, modelBlob);
@@ -687,9 +579,6 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
      * 2. Build training parameters (index_description with LeanVec encoding)
      * 3. Call JNIService.trainIndex() to produce a model blob
      * 4. Return the model blob for immediate use
-     *
-     * Note: JNICommons.storeVectorData() allocates a std::vector<float>* and returns its address as jlong.
-     * JNIService.trainIndex() casts this back to std::vector<float>* — the types match (C1 clarification).
      */
     private byte[] trainLeanVecModel(
         FieldInfo fieldInfo,
@@ -699,16 +588,11 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
         int dimension = getDimension(fieldInfo);
         int leanvecDims = getLeanVecDimensions(fieldInfo);
         if (dimension <= 0 || leanvecDims <= 0) {
-            // Record failure on early return so circuit breaker and stats are accurate
             log.warn("Cannot train LeanVec: invalid dimensions (dim={}, leanvecDims={})", dimension, leanvecDims);
             return null;
         }
 
-        // Track timing with try-finally to ensure StopWatch is always stopped
-        StopWatch stopWatch = new StopWatch().start();
-        boolean stopped = false;
         try {
-            // Build training parameters
             String indexDescription = getIndexDescriptionFromFieldInfo(fieldInfo);
             Map<String, Object> trainParameters = new HashMap<>();
             trainParameters.put(INDEX_DESCRIPTION_PARAMETER, indexDescription);
@@ -716,9 +600,8 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
             trainParameters.put(INDEX_THREAD_QTY, KNNSettings.getIndexThreadQty());
             trainParameters.put(VECTOR_DATA_TYPE_FIELD, VectorDataType.FLOAT.getValue());
 
-            // Cap training vectors at MAX_TRAINING_VECTORS to bound off-heap memory (C4 fix)
+            // Cap at MAX_TRAINING_VECTORS; uniformly sample if exceeded
             int trainingCount = Math.min(totalLiveDocs, MAX_TRAINING_VECTORS);
-            // Calculate sampling step for uniform sampling when totalLiveDocs > MAX_TRAINING_VECTORS (W5)
             int sampleStep = totalLiveDocs > MAX_TRAINING_VECTORS ? totalLiveDocs / MAX_TRAINING_VECTORS : 1;
 
             int bytesPerVector = dimension * Float.BYTES;
@@ -729,14 +612,13 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
                 int transferred = 0;
                 int docIndex = 0;
                 while (knnVectorValues.docId() != DocIdSetIterator.NO_MORE_DOCS && transferred < trainingCount) {
-                    // W8: Check for thread interruption during long training transfers
                     if (Thread.currentThread().isInterrupted()) {
                         log.warn("LeanVec training interrupted for field {}", fieldInfo.name);
                         return TRAINING_INTERRUPTED;
                     }
 
                     if (docIndex % sampleStep == 0) {
-                        // Clone to prevent buffer reuse corruption in batch transfer
+                        // Clone to avoid buffer reuse corruption
                         float[] vector = ((float[]) knnVectorValues.getVector()).clone();
                         vectorTransfer.transfer(vector, true);
                         transferred++;
@@ -748,7 +630,6 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
 
                 long vectorAddress = vectorTransfer.getVectorAddress();
 
-                // TODO: Consider replacing AccessController.doPrivileged when codebase moves to module system (W1)
                 byte[] modelBlob = AccessController.doPrivileged((PrivilegedAction<byte[]>) () -> {
                     return JNIService.trainIndex(trainParameters, dimension, vectorAddress, KNNEngine.FAISS);
                 });
@@ -758,58 +639,17 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
                     return null;
                 }
 
-                long timeMs = stopWatch.stop().totalTime().millis();
-                stopped = true;
-                log.info(
-                    "[Merge] LeanVec training complete for field {} ({} vectors sampled from {}, {}ms, blob={}KB)",
-                    fieldInfo.name,
-                    transferred,
-                    totalLiveDocs,
-                    timeMs,
-                    modelBlob.length / 1024
-                );
-
                 return modelBlob;
             }
         } catch (IOException | IllegalStateException | IllegalArgumentException e) {
-            // Only catch expected training failures; let OOM/Error propagate
             log.error("Failed to train LeanVec model for field {}: {}", fieldInfo.name, e.getMessage(), e);
             return null;
-        } finally {
-            // Ensure StopWatch is stopped on all exit paths (early returns, exceptions)
-            if (!stopped) {
-                try { stopWatch.stop(); } catch (IllegalStateException ignored) { }
-            }
-        }
-    }
-
-    /**
-     * Seeds the cumulative vector counter from committed segment metadata.
-     * Called on the first merge after restart to avoid a long LVQ fallback window.
-     * Uses SegmentInfos.readLatestCommit() which reads a single small file (no locking).
-     *
-     * Note: maxDoc() - delCount() counts all live documents, not just vector-bearing ones.
-     * For sparse vector fields this overcounts (triggers training earlier than necessary, which is harmless).
-     */
-    private void seedCounterFromCommittedSegments(FieldInfo fieldInfo, ShardModelCache cache) {
-        try {
-            Directory rawDir = FilterDirectory.unwrap(segmentWriteState.directory);
-            SegmentInfos infos = SegmentInfos.readLatestCommit(rawDir);
-            long totalVectors = 0;
-            for (SegmentCommitInfo sci : infos) {
-                totalVectors += sci.info.maxDoc() - sci.getDelCount();
-            }
-            cache.seedVectorCount(fieldInfo.name, totalVectors);
-            log.info("[Merge] Seeded cumulative counter from {} committed segments: {} vectors for field '{}'",
-                infos.size(), totalVectors, fieldInfo.name);
-        } catch (IOException e) {
-            log.warn("[Merge] Failed to seed counter from committed segments for field '{}': {}", fieldInfo.name, e.getMessage());
         }
     }
 
     /**
      * Extracts the index_description from field attributes PARAMETERS JSON.
-     * Throws IllegalStateException if parameters cannot be parsed or index_description is missing (W2 fix).
+     * Throws IllegalStateException if parameters cannot be parsed or index_description is missing.
      */
     private static String getIndexDescriptionFromFieldInfo(FieldInfo fieldInfo) {
         String parametersString = fieldInfo.attributes().get(PARAMETERS);
@@ -838,14 +678,7 @@ public class NativeEngines990KnnVectorsWriter extends KnnVectorsWriter {
         );
     }
 
-    /**
-     * Derives a stable shard identifier from the segment write state directory.
-     * Unwraps FilterDirectory wrappers to get the underlying FSDirectory path,
-     * which produces a consistent key like "/data/nodes/0/indices/&lt;uuid&gt;/&lt;shard&gt;/index".
-     *
-     * This must match the key used by ShardModelCache.removeInstancesForShard() in KNNPlugin
-     * to prevent memory leaks. Use FilterDirectory.unwrap() for consistency.
-     */
+    /** Derives a stable shard key from the underlying FSDirectory path. Must match ShardModelCache cleanup key. */
     private String getShardId() {
         Directory dir = FilterDirectory.unwrap(segmentWriteState.directory);
         if (dir instanceof org.apache.lucene.store.FSDirectory) {

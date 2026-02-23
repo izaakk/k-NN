@@ -25,8 +25,8 @@ import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_DEFAULT_T
 import static org.opensearch.knn.common.KNNConstants.DEFERRED_TRAINING_DEFAULT_INITIAL_THRESHOLD;
 
 /**
- * LeanVec (Adaptive vector quantization) encoder for SVS indexes.
- * Provides adaptive compression with optional dimension specification.
+ * LeanVec encoder for SVS indexes. Uses learned linear projections to reduce
+ * vector dimensionality before quantization, improving recall at a given compression ratio.
  * 
  * Parameters:
  * - primary_bits: bits for primary quantization (1-8, default: 4)

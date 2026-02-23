@@ -36,7 +36,6 @@ import java.util.List;
  * Footer (CodecUtil footer with CRC32)
  *
  * Follows the same pattern as {@link KNN990QuantizationStateWriter}.
- * Implements Closeable to ensure IndexOutput is properly released (C-R3-3 fix).
  */
 public final class LeanVecModelWriter implements Closeable {
 
@@ -55,9 +54,6 @@ public final class LeanVecModelWriter implements Closeable {
         output = segmentWriteState.directory.createOutput(fileName, segmentWriteState.context);
     }
 
-    /**
-     * Writes the codec index header.
-     */
     public void writeHeader(SegmentWriteState segmentWriteState) throws IOException {
         CodecUtil.writeIndexHeader(
             output,
@@ -68,18 +64,12 @@ public final class LeanVecModelWriter implements Closeable {
         );
     }
 
-    /**
-     * Writes a model blob for a given field.
-     */
     public void writeModel(int fieldNumber, byte[] modelBlob) throws IOException {
         long position = output.getFilePointer();
         output.writeBytes(modelBlob, modelBlob.length);
         fieldModels.add(new FieldModel(fieldNumber, modelBlob.length, position));
     }
 
-    /**
-     * Writes the index section and footer.
-     */
     public void writeFooter() throws IOException {
         long indexStartPosition = output.getFilePointer();
         output.writeInt(fieldModels.size());
@@ -93,9 +83,6 @@ public final class LeanVecModelWriter implements Closeable {
         CodecUtil.writeFooter(output);
     }
 
-    /**
-     * Closes the underlying IndexOutput. Alias for {@link #close()} for backward compatibility.
-     */
     public void closeOutput() throws IOException {
         close();
     }

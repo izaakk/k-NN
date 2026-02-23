@@ -379,12 +379,9 @@ public class KNNPlugin extends Plugin
                 org.apache.logging.log4j.LogManager.getLogger(KNNPlugin.class);
 
             /**
-             * After shard starts, load LeanVec models from .knnlvm segment files
-             * and seed the cumulative vector counter. This eliminates the LVQ fallback window
-             * after node restart, shard relocation, or snapshot restore.
-             *
-             * Only runs for KNN-enabled indices (O-R1-1 fix).
-             * Uses Store.incRef()/decRef() for safe directory access (L-R1-15/O-R1-2 fix).
+             * After shard starts, load LeanVec models from .knnlvm segment files.
+             * This eliminates the LVQ fallback window after node restart, shard relocation,
+             * or snapshot restore.
              */
             @Override
             public void afterIndexShardStarted(IndexShard indexShard) {
@@ -412,11 +409,6 @@ public class KNNPlugin extends Plugin
 
                     org.apache.lucene.index.SegmentInfos infos = store.readLastCommittedSegmentsInfo();
                     if (infos == null || infos.size() == 0) return;
-
-                    long totalVectors = 0;
-                    for (org.apache.lucene.index.SegmentCommitInfo sci : infos) {
-                        totalVectors += sci.info.maxDoc() - sci.getDelCount();
-                    }
 
                     // Check if any .knnlvm files exist before opening DirectoryReader
                     boolean hasModelFiles = false;
@@ -464,14 +456,6 @@ public class KNNPlugin extends Plugin
                                             break;
                                         }
                                     }
-                                }
-
-                                // Seed cumulative counter (use tryMarkCounterSeeded for CAS)
-                                if (cache.tryMarkCounterSeeded(fieldInfo.name) && totalVectors > 0) {
-                                    cache.seedVectorCount(fieldInfo.name, totalVectors);
-                                    logger.info(
-                                        "[ShardStart] Seeded cumulative counter: {} vectors for field '{}' (shard={})",
-                                        totalVectors, fieldInfo.name, indexShard.shardId());
                                 }
 
                                 recoveredFields.add(fieldInfo.name);

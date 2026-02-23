@@ -452,7 +452,7 @@ public class MMRUtil {
                 );
             }
 
-            // Final part -> should resolve to a vector
+            // Final part → should resolve to a vector
             if (i == pathParts.length - 1) {
                 if (current instanceof List<?> list) {
                     float[] floatVector = null;

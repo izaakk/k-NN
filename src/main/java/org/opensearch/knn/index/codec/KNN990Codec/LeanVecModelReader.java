@@ -167,10 +167,7 @@ public final class LeanVecModelReader {
         }
     }
 
-    /**
-     * Checks file existence using listAll() instead of opening a full IndexInput (W-R3-3 fix).
-     * Avoids unnecessary mmap/file descriptor allocation on every merge for every field.
-     */
+    /** Uses listAll() to avoid unnecessary file descriptor allocation. */
     private static boolean fileExistsInSegment(Directory dir, String fileName) throws IOException {
         return Arrays.asList(dir.listAll()).contains(fileName);
     }

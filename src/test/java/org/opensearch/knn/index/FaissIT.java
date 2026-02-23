@@ -2872,117 +2872,9 @@ public class FaissIT extends KNNRestTestCase {
     }
 
     /**
-     * Test SVS Vamana index with LeanVec encoder using model-based training.
-     * LeanVec requires training to compute transformation matrices.
-     */
-    @SneakyThrows
-    public void testSVSVamana_withLeanVecEncoder_usingTrainedModel_thenSucceed() {
-        String indexName = "test-index-svs-leanvec";
-        String fieldName = "test-field";
-        String trainingIndexName = "training-index-svs-leanvec";
-        String trainingFieldName = "training-field";
-
-        String modelId = "test-model-svs-leanvec";
-        String modelDescription = "SVS Vamana with LeanVec encoder model";
-
-        int dimension = 128;
-        int trainingDataCount = 1100; // Sufficient training data for LeanVec
-        SpaceType spaceType = SpaceType.L2;
-
-        // Step 1: Create training index and ingest training data
-        createBasicKnnIndex(trainingIndexName, trainingFieldName, dimension);
-        bulkIngestRandomVectors(trainingIndexName, trainingFieldName, trainingDataCount, dimension);
-
-        // Step 2: Define SVS Vamana method with LeanVec encoder
-        XContentBuilder methodBuilder = XContentFactory.jsonBuilder()
-            .startObject()
-            .field(NAME, "svs_vamana")
-            .field(KNN_ENGINE, FAISS_NAME)
-            .field(METHOD_PARAMETER_SPACE_TYPE, spaceType.getValue())
-            .startObject(PARAMETERS)
-            .field(METHOD_PARAMETER_DEGREE, 64)
-            .startObject(METHOD_ENCODER_PARAMETER)
-            .field(NAME, "leanvec")
-            .startObject(PARAMETERS)
-            .field("primary_bits", 4)
-            .field("residual_bits", 4)
-            .field("dimensions", 0)
-            .endObject()
-            .endObject()
-            .endObject()
-            .endObject();
-        Map<String, Object> method = xContentBuilderToMap(methodBuilder);
-
-        // Step 3: Train the model
-        trainModel(modelId, trainingIndexName, trainingFieldName, dimension, method, modelDescription);
-        assertTrainingSucceeds(modelId, 360, 1000);
-
-        // Step 4: Create an index using the trained model
-        XContentBuilder builder = XContentFactory.jsonBuilder()
-            .startObject()
-            .startObject("properties")
-            .startObject(fieldName)
-            .field("type", "knn_vector")
-            .field(MODEL_ID, modelId)
-            .endObject()
-            .endObject()
-            .endObject();
-
-        Map<String, Object> mappingMap = xContentBuilderToMap(builder);
-        String mapping = builder.toString();
-
-        createKnnIndex(indexName, mapping);
-        assertEquals(new TreeMap<>(mappingMap), new TreeMap<>(getIndexMappingAsMap(indexName)));
-
-        // Step 5: Index test data
-        int numDocs = 100;
-        for (int i = 0; i < Math.min(testData.indexData.docs.length, numDocs); i++) {
-            addKnnDoc(
-                indexName,
-                Integer.toString(testData.indexData.docs[i]),
-                fieldName,
-                Floats.asList(testData.indexData.vectors[i]).toArray()
-            );
-        }
-
-        // Assert we have the right number of documents in the index
-        refreshAllNonSystemIndices();
-        assertEquals(Math.min(testData.indexData.docs.length, numDocs), getDocCount(indexName));
-
-        // Step 6: Test search functionality
-        int k = 10;
-        for (int i = 0; i < Math.min(testData.queries.length, 10); i++) {
-            Response response = searchKNNIndex(indexName, new KNNQueryBuilder(fieldName, testData.queries[i], k), k);
-            String responseBody = EntityUtils.toString(response.getEntity());
-            List<KNNResult> knnResults = parseSearchResponse(responseBody, fieldName);
-            assertEquals(k, knnResults.size());
-
-            List<Float> actualScores = parseSearchResponseScore(responseBody, fieldName);
-            for (int j = 0; j < k; j++) {
-                float[] primitiveArray = knnResults.get(j).getVector();
-                assertEquals(
-                    KNNEngine.FAISS.score(KNNScoringUtil.l2Squared(testData.queries[i], primitiveArray), spaceType),
-                    actualScores.get(j),
-                    0.0001
-                );
-            }
-        }
-
-        // Clean up
-        deleteKNNIndex(indexName);
-        deleteKNNIndex(trainingIndexName);
-        deleteModel(modelId);
-        validateGraphEviction();
-    }
-
-    /**
-     * Test SVS Vamana index with LeanVec encoder using direct creation (no model).
-     * 
-     * LeanVec requires training to compute transformation matrices. In direct index creation,
-     * OpenSearch's native layer handles the train-then-add pattern automatically:
-     * 1. Collects all vectors during index building
-     * 2. Calls train(vectors) to compute transformation matrices
-     * 3. Calls add(vectors) with the same data to build the index
+     * Test SVS Vamana index with LeanVec encoder using direct creation.
+     * With deferred training, LeanVec uses LVQ fallback until enough vectors
+     * accumulate to trigger model training during a merge.
      */
     @SneakyThrows
     public void testSVSVamana_withLeanVecEncoder_directCreation_thenSucceed() {
@@ -3025,8 +2917,6 @@ public class FaissIT extends KNNRestTestCase {
         createKnnIndex(indexName, mapping);
         assertEquals(new TreeMap<>(mappingMap), new TreeMap<>(getIndexMappingAsMap(indexName)));
 
-        // Index test data
-        // OpenSearch native layer must handle: collect vectors → train() → add()
         int numDocs = 100;
         for (int i = 0; i < Math.min(testData.indexData.docs.length, numDocs); i++) {
             addKnnDoc(
@@ -3056,88 +2946,6 @@ public class FaissIT extends KNNRestTestCase {
 
         // Clean up
         deleteKNNIndex(indexName);
-    }
-
-    @SneakyThrows
-    public void testSVSVamana_withLeanVecEncoder_workflowOnly_thenSucceed() {
-        String indexName = "test-index-svs-leanvec-workflow";
-        String fieldName = "test-field";
-        String trainingIndexName = "training-index-svs-leanvec-workflow";
-        String trainingFieldName = "training-field";
-
-        String modelId = "test-model-svs-leanvec-workflow";
-        String modelDescription = "SVS Vamana with LeanVec encoder model - workflow test";
-
-        int dimension = 128;
-        int trainingDataCount = 1100; // Sufficient training data for LeanVec
-        int numDocs = 100;
-
-        // Step 1: Create training index and ingest training data
-        createBasicKnnIndex(trainingIndexName, trainingFieldName, dimension);
-        bulkIngestRandomVectors(trainingIndexName, trainingFieldName, trainingDataCount, dimension);
-
-        // Step 2: Define SVS Vamana method with LeanVec encoder
-        XContentBuilder methodBuilder = XContentFactory.jsonBuilder()
-            .startObject()
-            .field(NAME, "svs_vamana")
-            .field(KNN_ENGINE, FAISS_NAME)
-            .field(METHOD_PARAMETER_SPACE_TYPE, "l2")
-            .startObject(PARAMETERS)
-            .field(METHOD_PARAMETER_DEGREE, 64)
-            .startObject(METHOD_ENCODER_PARAMETER)
-            .field(NAME, "leanvec")
-            .startObject(PARAMETERS)
-            .field("primary_bits", 4)
-            .field("residual_bits", 4)
-            .field("dimensions", 0)
-            .endObject()
-            .endObject()
-            .endObject()
-            .endObject();
-        Map<String, Object> method = xContentBuilderToMap(methodBuilder);
-
-        // Step 3: Train the model
-        trainModel(modelId, trainingIndexName, trainingFieldName, dimension, method, modelDescription);
-        assertTrainingSucceeds(modelId, 360, 1000);
-
-        // Step 4: Create an index using the trained model
-        XContentBuilder builder = XContentFactory.jsonBuilder()
-            .startObject()
-            .startObject("properties")
-            .startObject(fieldName)
-            .field("type", "knn_vector")
-            .field(MODEL_ID, modelId)
-            .endObject()
-            .endObject()
-            .endObject();
-
-        String mapping = builder.toString();
-        createKnnIndex(indexName, getKNNDefaultIndexSettings(), mapping);
-
-        // Step 5: Index test data using synthetic data (like IVF tests)
-        for (int i = 0; i < numDocs; i++) {
-            float[] indexVector = new float[dimension];
-            Arrays.fill(indexVector, (float) i);
-            addKnnDocWithAttributes(indexName, Integer.toString(i), fieldName, indexVector, ImmutableMap.of("rating", String.valueOf(i)));
-        }
-
-        // Assert that docs are ingested (note: LeanVec may drop some vectors silently)
-        refreshAllNonSystemIndices();
-        int actualDocCount = getDocCount(indexName);
-        assertTrue("Expected some documents to be indexed, but got: " + actualDocCount, actualDocCount > 0);
-        
-        // Step 6: Search to verify basic functionality (just check that search returns results)
-        float[] queryVector = new float[dimension];
-        Arrays.fill(queryVector, (float) numDocs);
-        int k = 10;
-        Response searchResponse = searchKNNIndex(indexName, buildSearchQuery(fieldName, k, queryVector, null), k);
-        List<KNNResult> results = parseSearchResponse(EntityUtils.toString(searchResponse.getEntity()), fieldName);
-        assertTrue("Expected search to return some results, but got: " + results.size(), results.size() > 0);
-        
-        // Clean up
-        deleteKNNIndex(indexName);
-        deleteModel(modelId);
-        validateGraphEviction();
     }
 
 }

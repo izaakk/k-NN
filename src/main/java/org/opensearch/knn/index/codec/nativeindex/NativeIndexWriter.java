@@ -383,7 +383,7 @@ public class NativeIndexWriter {
     }
 
     /**
-     * Removes training_threshold from the nested encoder parameters (C-R3-4 fix).
+     * Removes training_threshold from the nested encoder parameters.
      * training_threshold is a codec-layer parameter that leaks through MethodComponent's
      * getParameterMapWithDefaultsAdded() into the FAISS parameters JSON. It has no meaning
      * to FAISS/SVS and may cause JNI errors if the native layer rejects unknown parameters.
