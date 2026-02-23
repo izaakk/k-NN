@@ -49,6 +49,8 @@ public class KNN80CompoundFormat extends CompoundFormat {
         for (KNNEngine knnEngine : KNNEngine.getEnginesThatCreateCustomSegmentFiles()) {
             writeEngineFiles(dir, si, context, knnEngine.getExtension());
         }
+        // Exclude LeanVec model files from compound file format (same as engine files)
+        writeEngineFiles(dir, si, context, KNNConstants.LEANVEC_MODEL_FILE_SUFFIX);
         delegate.write(dir, si, context);
     }
 

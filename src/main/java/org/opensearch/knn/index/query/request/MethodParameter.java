@@ -22,8 +22,12 @@ import java.util.Map;
 
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_EF_SEARCH;
 import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_NPROBES;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY;
+import static org.opensearch.knn.common.KNNConstants.METHOD_PARAMETER_SEARCH_WINDOW_SIZE;
 import static org.opensearch.knn.index.query.KNNQueryBuilder.EF_SEARCH_FIELD;
 import static org.opensearch.knn.index.query.KNNQueryBuilder.NPROBE_FIELD;
+import static org.opensearch.knn.index.query.KNNQueryBuilder.SEARCH_BUFFER_CAPACITY_FIELD;
+import static org.opensearch.knn.index.query.KNNQueryBuilder.SEARCH_WINDOW_SIZE_FIELD;
 
 /**
  * MethodParameters are engine and algorithm related parameters that clients can pass in knn query
@@ -67,6 +71,44 @@ public enum MethodParameter {
 
             ValidationException validationException = new ValidationException();
             validationException.addValidationError(METHOD_PARAMETER_NPROBES + " should be greater than 0");
+            return validationException;
+        }
+    },
+
+    SEARCH_WINDOW_SIZE(METHOD_PARAMETER_SEARCH_WINDOW_SIZE, Version.V_3_0_0, SEARCH_WINDOW_SIZE_FIELD) {
+        @Override
+        public Integer parse(Object value) {
+            return parseInteger(value, METHOD_PARAMETER_SEARCH_WINDOW_SIZE);
+        }
+
+        @Override
+        public ValidationException validate(Object value) {
+            final Integer searchWindow = parse(value);
+            if (searchWindow != null && searchWindow > 0) {
+                return null;
+            }
+
+            ValidationException validationException = new ValidationException();
+            validationException.addValidationError(METHOD_PARAMETER_SEARCH_WINDOW_SIZE + " should be greater than 0");
+            return validationException;
+        }
+    },
+
+    SEARCH_BUFFER_CAPACITY(METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY, Version.V_3_0_0, SEARCH_BUFFER_CAPACITY_FIELD) {
+        @Override
+        public Integer parse(Object value) {
+            return parseInteger(value, METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY);
+        }
+
+        @Override
+        public ValidationException validate(Object value) {
+            final Integer searchBuffer = parse(value);
+            if (searchBuffer != null && searchBuffer > 0) {
+                return null;
+            }
+
+            ValidationException validationException = new ValidationException();
+            validationException.addValidationError(METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY + " should be greater than 0");
             return validationException;
         }
     };

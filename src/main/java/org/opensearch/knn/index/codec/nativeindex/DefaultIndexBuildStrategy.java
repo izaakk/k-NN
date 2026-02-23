@@ -77,14 +77,17 @@ final class DefaultIndexBuildStrategy implements NativeIndexBuildStrategy {
             long vectorAddress = vectorTransfer.getVectorAddress();
             // Currently this is if else as there are only two cases, with more cases this will have to be made
             // more maintainable
-            if (params.containsKey(MODEL_ID)) {
+            if (params.containsKey(MODEL_ID) || params.containsKey(KNNConstants.SHARD_MODEL_BLOB_PARAMETER)) {
+                final byte[] templateBlob = params.containsKey(KNNConstants.SHARD_MODEL_BLOB_PARAMETER)
+                    ? (byte[]) params.get(KNNConstants.SHARD_MODEL_BLOB_PARAMETER)
+                    : (byte[]) params.get(KNNConstants.MODEL_BLOB_PARAMETER);
                 AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
                     JNIService.createIndexFromTemplate(
                         intListToArray(transferredDocIds),
                         vectorAddress,
                         indexBuildSetup.getDimensions(),
                         indexInfo.getIndexOutputWithBuffer(),
-                        (byte[]) params.get(KNNConstants.MODEL_BLOB_PARAMETER),
+                        templateBlob,
                         params,
                         indexInfo.getKnnEngine()
                     );
