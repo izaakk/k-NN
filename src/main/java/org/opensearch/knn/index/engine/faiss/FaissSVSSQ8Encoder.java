@@ -26,7 +26,7 @@ public class FaissSVSSQ8Encoder implements Encoder {
         .addSupportedDataTypes(Set.of(VectorDataType.FLOAT))
         .setKnnLibraryIndexingContextGenerator(
             ((methodComponent, methodComponentContext, knnMethodConfigContext) -> MethodAsMapBuilder.builder(
-                "SQ8",
+                "SQI8",
                 methodComponent,
                 methodComponentContext,
                 knnMethodConfigContext
