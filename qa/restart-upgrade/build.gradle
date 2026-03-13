@@ -31,7 +31,6 @@ testClusters {
         } else {
             systemProperty "java.library.path", "${buildDir}/testclusters/${baseName}-0/distro/${knn_bwc_version_no_qualifier}-ARCHIVE/plugins/opensearch-knn/knnlib:${buildDir}/testclusters/${baseName}-0/distro/${knn_bwc_version_no_qualifier}-ARCHIVE/plugins/opensearch-knn/lib"
         }
-
     }
 }
 
@@ -111,8 +110,12 @@ task testAgainstOldCluster(type: StandaloneRestIntegTestTask) {
     if (validPrefixesForQFrameBitEncoderBWCChecks.any { knn_bwc_version.startsWith(it) }
             ) {
         filter {
+            excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testDiskBasedMergeBWC"
             excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testRandomRotationBWC"
             excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testADC_BWC"
+            excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testMixedFieldsWithCompressionRestartUpgrade"
+            excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testMixedSegmentsWithCompressionRestartUpgrade"
+            excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testVectorFieldRemovalByUpdateCompressionRestartUpgrade"
         }
     }
 
@@ -121,6 +124,9 @@ task testAgainstOldCluster(type: StandaloneRestIntegTestTask) {
         filter {
             excludeTestsMatching "org.opensearch.knn.bwc.QueryANNIT.testQueryOnLuceneIndex"
             excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testKNNIndexLuceneForceMerge"
+            excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testMixedFieldsWithLuceneRestartUpgrade"
+            excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testVectorFieldRemovalByUpdateLuceneRestartUpgrade"
+            excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testMixedSegmentsWithLuceneRestartUpgrade"
         }
     }
     if (!(knn_bwc_version.startsWith("2.13.") ||
@@ -173,6 +179,9 @@ task testAgainstOldCluster(type: StandaloneRestIntegTestTask) {
     nonInputProperties.systemProperty('tests.rest.cluster', "${-> testClusters."${baseName}".allHttpSocketURI.join(",")}")
     nonInputProperties.systemProperty('tests.clustername', "${-> testClusters."${baseName}".getName()}")
     systemProperty 'tests.security.manager', 'false'
+    
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
 }
 
 // All nodes are upgraded to latest version and run the tests
@@ -260,8 +269,12 @@ task testRestartUpgrade(type: StandaloneRestIntegTestTask) {
     def validPrefixesForQFrameBitEncoderBWCChecks = ['1.'] + ((0..16).collect { "2.${it}." } as Collection<String>)
     if (validPrefixesForQFrameBitEncoderBWCChecks.any { knn_bwc_version.startsWith(it) }) {
         filter {
+            excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testDiskBasedMergeBWC"
             excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testRandomRotationBWC"
             excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testADC_BWC"
+            excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testMixedFieldsWithCompressionRestartUpgrade"
+            excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testMixedSegmentsWithCompressionRestartUpgrade"
+            excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testVectorFieldRemovalByUpdateCompressionRestartUpgrade"
         }
     }
 
@@ -269,6 +282,9 @@ task testRestartUpgrade(type: StandaloneRestIntegTestTask) {
         filter {
             excludeTestsMatching "org.opensearch.knn.bwc.QueryANNIT.testQueryOnLuceneIndex"
             excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testKNNIndexLuceneForceMerge"
+            excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testMixedFieldsWithLuceneRestartUpgrade"
+            excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testVectorFieldRemovalByUpdateLuceneRestartUpgrade"
+            excludeTestsMatching "org.opensearch.knn.bwc.IndexingIT.testMixedSegmentsWithLuceneRestartUpgrade"
         }
     }
 
@@ -322,4 +338,7 @@ task testRestartUpgrade(type: StandaloneRestIntegTestTask) {
     nonInputProperties.systemProperty('tests.rest.cluster', "${-> testClusters."${baseName}".allHttpSocketURI.join(",")}")
     nonInputProperties.systemProperty('tests.clustername', "${-> testClusters."${baseName}".getName()}")
     systemProperty 'tests.security.manager', 'false'
+
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
 }

@@ -34,7 +34,8 @@ import org.opensearch.knn.index.VectorDataType;
 import org.opensearch.knn.index.codec.util.KNNCodecUtil;
 import org.opensearch.knn.index.engine.KNNEngine;
 import org.opensearch.knn.index.quantizationservice.QuantizationService;
-import org.opensearch.knn.index.query.ExactSearcher.ExactSearcherContext.ExactSearcherContextBuilder;
+import org.opensearch.knn.index.query.exactsearch.ExactSearcher;
+import org.opensearch.knn.index.query.exactsearch.ExactSearcher.ExactSearcherContext.ExactSearcherContextBuilder;
 import org.opensearch.knn.index.query.explain.KnnExplanation;
 import org.opensearch.knn.indices.ModelDao;
 import org.opensearch.knn.indices.ModelMetadata;
@@ -201,11 +202,19 @@ public abstract class KNNWeight extends Weight {
             sb.append(KNNConstants.EXACT_SEARCH).append(" since no native engine files are available");
         }
         if (annResult != null && isFilteredExactSearchRequireAfterANNSearch(cardinality, annResult)) {
-            sb.append(KNNConstants.EXACT_SEARCH)
-                .append(" since the number of documents returned are less than K = ")
-                .append(knnQuery.getK())
-                .append(" and there are more than K filtered Ids = ")
-                .append(cardinality);
+            boolean isExactSearchDisabled = KNNSettings.isKnnIndexFaissEfficientFilterExactSearchDisabled(knnQuery.getIndexName());
+            if (isExactSearchDisabled) {
+                sb.append(KNNConstants.ANN_SEARCH)
+                    .append(", it is not falling back to exact search after ")
+                    .append(KNNConstants.ANN_SEARCH)
+                    .append(" search since exact search is disabled,");
+            } else {
+                sb.append(KNNConstants.EXACT_SEARCH)
+                    .append(" since the number of documents returned are less than K = ")
+                    .append(knnQuery.getK())
+                    .append(" and there are more than K filtered Ids = ")
+                    .append(cardinality);
+            }
         }
         if (annResult != null && annResult > 0 && !isFilteredExactSearchRequireAfterANNSearch(cardinality, annResult)) {
             sb.append(KNNConstants.ANN_SEARCH);
@@ -482,8 +491,7 @@ public abstract class KNNWeight extends Weight {
         final SegmentLevelQuantizationInfo segmentLevelQuantizationInfo = SegmentLevelQuantizationInfo.build(
             reader,
             fieldInfo,
-            knnQuery.getField(),
-            reader.getSegmentInfo().info.getVersion()
+            knnQuery.getField()
         );
 
         List<String> engineFiles = KNNCodecUtil.getEngineFiles(knnEngine.getExtension(), knnQuery.getField(), reader.getSegmentInfo().info);
@@ -664,7 +672,18 @@ public abstract class KNNWeight extends Weight {
             log.debug("Perform exact search after approximate search since no native engine files are available");
             return true;
         }
+
         if (isFilteredExactSearchRequireAfterANNSearch(filterIdsCount, annResultCount)) {
+
+            // Disable the fallback mechanism to exact search after ANN Search when the index setting is set to true
+            if (KNNSettings.isKnnIndexFaissEfficientFilterExactSearchDisabled(knnQuery.getIndexName())) {
+                log.debug(
+                    "ExactSearch is disabled after ANN Search because the index setting: {} is set to true",
+                    KNNSettings.INDEX_KNN_FAISS_EFFICIENT_FILTER_DISABLE_EXACT_SEARCH
+                );
+                return false;
+            }
+
             log.debug(
                 "Doing ExactSearch after doing ANNSearch as the number of documents returned are less than "
                     + "K, even when we have more than K filtered Ids. K: {}, ANNResults: {}, filteredIdCount: {}",

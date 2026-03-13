@@ -215,6 +215,97 @@ public class ModeAndCompressionIT extends KNNRestTestCase {
     }
 
     @SneakyThrows
+    public void testLowDimensionCompression_whenValid_ThenSucceed() {
+        int[] testDimensions = { 2, 5, 12 };
+
+        XContentBuilder builder;
+        for (int dimension : testDimensions) {
+            for (String compressionLevel : COMPRESSION_LEVELS) {
+                String indexName = INDEX_NAME + "_dim" + dimension + "_" + compressionLevel;
+                builder = XContentFactory.jsonBuilder()
+                    .startObject()
+                    .startObject("properties")
+                    .startObject(FIELD_NAME)
+                    .field("type", "knn_vector")
+                    .field("dimension", dimension)
+                    .field(COMPRESSION_LEVEL_PARAMETER, compressionLevel)
+                    .endObject()
+                    .endObject()
+                    .endObject();
+                String mapping = builder.toString();
+                validateIndexWithDimension(indexName, mapping, dimension);
+                logger.info("Dimension {} with compression level {}", dimension, compressionLevel);
+                validateSearchWithDimension(
+                    indexName,
+                    METHOD_PARAMETER_EF_SEARCH,
+                    KNNSettings.INDEX_KNN_DEFAULT_ALGO_PARAM_EF_SEARCH,
+                    compressionLevel,
+                    Mode.NOT_CONFIGURED.getName(),
+                    dimension
+                );
+            }
+
+            for (String compressionLevel : COMPRESSION_LEVELS) {
+                for (String mode : Mode.NAMES_ARRAY) {
+                    String indexName = INDEX_NAME + "_dim" + dimension + "_" + compressionLevel + "_" + mode;
+                    builder = XContentFactory.jsonBuilder()
+                        .startObject()
+                        .startObject("properties")
+                        .startObject(FIELD_NAME)
+                        .field("type", "knn_vector")
+                        .field("dimension", dimension)
+                        .field(MODE_PARAMETER, mode)
+                        .field(COMPRESSION_LEVEL_PARAMETER, compressionLevel)
+                        .endObject()
+                        .endObject()
+                        .endObject();
+                    String mapping = builder.toString();
+                    validateIndexWithDimension(indexName, mapping, dimension);
+                    logger.info("Dimension {} with compression level {} and mode {}", dimension, compressionLevel, mode);
+                    validateSearchWithDimension(
+                        indexName,
+                        METHOD_PARAMETER_EF_SEARCH,
+                        KNNSettings.INDEX_KNN_DEFAULT_ALGO_PARAM_EF_SEARCH,
+                        compressionLevel,
+                        mode,
+                        dimension
+                    );
+                }
+            }
+
+            for (String mode : Mode.NAMES_ARRAY) {
+                String indexName = INDEX_NAME + "_dim" + dimension + "_" + mode;
+                builder = XContentFactory.jsonBuilder()
+                    .startObject()
+                    .startObject("properties")
+                    .startObject(FIELD_NAME)
+                    .field("type", "knn_vector")
+                    .field("dimension", dimension)
+                    .field(MODE_PARAMETER, mode)
+                    .endObject()
+                    .endObject()
+                    .endObject();
+                String mapping = builder.toString();
+                validateIndexWithDimension(indexName, mapping, dimension);
+                logger.info(
+                    "Dimension {} with mode {} and compression level {}",
+                    dimension,
+                    mode,
+                    CompressionLevel.NOT_CONFIGURED.getName()
+                );
+                validateSearchWithDimension(
+                    indexName,
+                    METHOD_PARAMETER_EF_SEARCH,
+                    KNNSettings.INDEX_KNN_DEFAULT_ALGO_PARAM_EF_SEARCH,
+                    CompressionLevel.NOT_CONFIGURED.getName(),
+                    mode,
+                    dimension
+                );
+            }
+        }
+    }
+
+    @SneakyThrows
     public void testQueryRescoreEnabledAndDisabled() {
         XContentBuilder builder;
         String mode = Mode.ON_DISK.getName();
@@ -422,6 +513,123 @@ public class ModeAndCompressionIT extends KNNRestTestCase {
         }
     }
 
+    /**
+     * Test segment with knn_vector field mapping but no docs containing the vector field.
+     * Creates separate segments: one with vector docs, one with only non-vector doc.
+     * Validates k-NN search functionality works without errors for ON_DISK mode with compression.
+     */
+    @SneakyThrows
+    public void testMixedSegmentsWithNonVectorDoc_whenValid_ThenSucceed() {
+        for (String compressionLevelName : COMPRESSION_LEVELS) {
+            String indexName = INDEX_NAME + "_mixed_segments_" + compressionLevelName;
+            try (
+                XContentBuilder builder = XContentFactory.jsonBuilder()
+                    .startObject()
+                    .startObject("properties")
+                    .startObject(FIELD_NAME)
+                    .field("type", "knn_vector")
+                    .field("dimension", DIMENSION)
+                    .field(COMPRESSION_LEVEL_PARAMETER, compressionLevelName)
+                    .field(MODE_PARAMETER, Mode.ON_DISK.getName())
+                    .endObject()
+                    .startObject(FIELD_NAME_NON_KNN)
+                    .field("type", "text")
+                    .endObject()
+                    .endObject()
+                    .endObject()
+            ) {
+                String mapping = builder.toString();
+                Settings indexSettings = buildKNNIndexSettings(0);
+                createKnnIndex(indexName, indexSettings, mapping);
+
+                // Add 21 docs with vector fields
+                addKNNDocs(indexName, FIELD_NAME, DIMENSION, 0, NUM_DOCS + 1);
+                // Flush to create a segment with vector docs
+                flush(indexName, true);
+
+                // Add 1 doc with only non-vector field (should get its own segment)
+                addNonKNNDoc(indexName, String.valueOf(NUM_DOCS + 2), FIELD_NAME_NON_KNN, "Non-vector document");
+                // Flush to ensure proper segmentation
+                flush(indexName, true);
+
+                validateGreenIndex(indexName);
+                int segmentCount = getTotalSegmentCount(indexName);
+                assertTrue(segmentCount >= 2);
+
+                validateSearch(
+                    indexName,
+                    METHOD_PARAMETER_EF_SEARCH,
+                    KNNSettings.INDEX_KNN_DEFAULT_ALGO_PARAM_EF_SEARCH,
+                    compressionLevelName,
+                    Mode.ON_DISK.getName()
+                );
+            }
+        }
+    }
+
+    /**
+     * Test segment with knn_vector field mapping but no docs containing the vector field.
+     * Creates a doc with vector field, then updates it to remove the vector field.
+     * Validates k-NN search functionality works without errors for ON_DISK mode with compression.
+     */
+    @SneakyThrows
+    public void testVectorFieldRemovalByUpdate_whenValid_thenSucceed() {
+        for (String compressionLevelName : COMPRESSION_LEVELS) {
+            String indexName = INDEX_NAME + "_vector_removal_" + compressionLevelName;
+
+            try (
+                XContentBuilder builder = XContentFactory.jsonBuilder()
+                    .startObject()
+                    .startObject("properties")
+                    .startObject(FIELD_NAME)
+                    .field("type", "knn_vector")
+                    .field("dimension", DIMENSION)
+                    .field(COMPRESSION_LEVEL_PARAMETER, compressionLevelName)
+                    .field(MODE_PARAMETER, Mode.ON_DISK.getName())
+                    .endObject()
+                    .startObject("description")
+                    .field("type", "text")
+                    .endObject()
+                    .endObject()
+                    .endObject()
+            ) {
+                String mapping = builder.toString();
+                Settings indexSettings = buildKNNIndexSettings(0);
+                createKnnIndex(indexName, indexSettings, mapping);
+
+                // Add 21 docs with vector fields
+                addKNNDocs(indexName, FIELD_NAME, DIMENSION, 0, NUM_DOCS + 1);
+                // Flush to create a segment with vector docs
+                flush(indexName, true);
+
+                // Add doc with both vector and text field
+                String docId = String.valueOf(NUM_DOCS + 1);
+                String docWithBoth = XContentFactory.jsonBuilder()
+                    .startObject()
+                    .field(FIELD_NAME, TEST_VECTOR)
+                    .field("description", "Test document")
+                    .endObject()
+                    .toString();
+                addKnnDoc(indexName, docId, docWithBoth);
+
+                // Update doc to remove vector field, keeping only text field
+                addNonKNNDoc(indexName, docId, "description", "Updated test document");
+                // Flush to create a new segment containing doc with no vector fields
+                flush(indexName, true);
+
+                validateGreenIndex(indexName);
+
+                validateSearch(
+                    indexName,
+                    METHOD_PARAMETER_EF_SEARCH,
+                    KNNSettings.INDEX_KNN_DEFAULT_ALGO_PARAM_EF_SEARCH,
+                    compressionLevelName,
+                    Mode.ON_DISK.getName()
+                );
+            }
+        }
+    }
+
     @SneakyThrows
     public void testTraining_whenInvalid_thenFail() {
         setupTrainingIndex();
@@ -548,6 +756,114 @@ public class ModeAndCompressionIT extends KNNRestTestCase {
         createKnnIndex(indexName, mapping);
         addKNNDocs(indexName, FIELD_NAME, DIMENSION, 0, NUM_DOCS);
         forceMergeKnnIndex(indexName, 1);
+    }
+
+    @SneakyThrows
+    private void validateIndexWithDimension(String indexName, String mapping, int dimension) {
+        createKnnIndex(indexName, mapping);
+        addKNNDocs(indexName, FIELD_NAME, dimension, 0, NUM_DOCS);
+        forceMergeKnnIndex(indexName, 1);
+    }
+
+    @SneakyThrows
+    private void validateSearchWithDimension(
+        String indexName,
+        String methodParameterName,
+        int methodParameterValue,
+        String compressionLevelString,
+        String mode,
+        int dimension
+    ) {
+        float[] testVector = new float[dimension];
+        Arrays.fill(testVector, 1.0f);
+
+        // Basic search
+        Response response = searchKNNIndex(
+            indexName,
+            XContentFactory.jsonBuilder()
+                .startObject()
+                .startObject("query")
+                .startObject("knn")
+                .startObject(FIELD_NAME)
+                .field("vector", testVector)
+                .field("k", K)
+                .startObject(METHOD_PARAMETER)
+                .field(methodParameterName, methodParameterValue)
+                .endObject()
+                .endObject()
+                .endObject()
+                .endObject()
+                .endObject(),
+            K
+        );
+        assertOK(response);
+        String responseBody = EntityUtils.toString(response.getEntity());
+        List<Float> knnResults = parseSearchResponseScore(responseBody, FIELD_NAME);
+        assertEquals(K, knnResults.size());
+
+        // Do exact search and gather right scores for the documents
+        Response exactSearchResponse = searchKNNIndex(
+            indexName,
+            XContentFactory.jsonBuilder()
+                .startObject()
+                .startObject("query")
+                .startObject("script_score")
+                .startObject("query")
+                .field("match_all")
+                .startObject()
+                .endObject()
+                .endObject()
+                .startObject("script")
+                .field("source", "knn_score")
+                .field("lang", "knn")
+                .startObject("params")
+                .field("field", FIELD_NAME)
+                .field("query_value", testVector)
+                .field("space_type", SpaceType.L2.getValue())
+                .endObject()
+                .endObject()
+                .endObject()
+                .endObject()
+                .endObject(),
+            K
+        );
+        assertOK(exactSearchResponse);
+        String exactSearchResponseBody = EntityUtils.toString(exactSearchResponse.getEntity());
+        List<Float> exactSearchKnnResults = parseSearchResponseScore(exactSearchResponseBody, FIELD_NAME);
+        assertEquals(NUM_DOCS, exactSearchKnnResults.size());
+        if (Mode.ON_DISK.getName().equals(mode)) {
+            Assert.assertEquals(exactSearchKnnResults, knnResults);
+        }
+
+        // Search with rescore
+        response = searchKNNIndex(
+            indexName,
+            XContentFactory.jsonBuilder()
+                .startObject()
+                .startObject("query")
+                .startObject("knn")
+                .startObject(FIELD_NAME)
+                .field("vector", testVector)
+                .field("k", K)
+                .startObject(RescoreParser.RESCORE_PARAMETER)
+                .field(RescoreParser.RESCORE_OVERSAMPLE_PARAMETER, 2.0f)
+                .endObject()
+                .startObject(METHOD_PARAMETER)
+                .field(methodParameterName, methodParameterValue)
+                .endObject()
+                .endObject()
+                .endObject()
+                .endObject()
+                .endObject(),
+            K
+        );
+        assertOK(response);
+        responseBody = EntityUtils.toString(response.getEntity());
+        knnResults = parseSearchResponseScore(responseBody, FIELD_NAME);
+        assertEquals(K, knnResults.size());
+        if (Mode.ON_DISK.getName().equals(mode)) {
+            Assert.assertEquals(exactSearchKnnResults, knnResults);
+        }
     }
 
     @SneakyThrows

@@ -7,6 +7,8 @@ package org.opensearch.knn.integ;
 
 import lombok.SneakyThrows;
 import org.junit.Before;
+import org.opensearch.client.Request;
+import org.opensearch.client.Response;
 import org.opensearch.client.ResponseException;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.xcontent.XContentFactory;
@@ -14,6 +16,7 @@ import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.knn.DerivedSourceTestCase;
 import org.opensearch.knn.DerivedSourceUtils;
 import org.opensearch.knn.Pair;
+import org.opensearch.knn.common.KNNConstants;
 import org.opensearch.knn.index.VectorDataType;
 import org.opensearch.knn.common.annotation.ExpectRemoteBuildValidation;
 
@@ -27,6 +30,7 @@ import java.util.Random;
 import static org.opensearch.knn.DerivedSourceUtils.DERIVED_ENABLED_WITH_SEGREP_SETTINGS;
 import static org.opensearch.knn.DerivedSourceUtils.TEST_DIMENSION;
 import static org.opensearch.knn.DerivedSourceUtils.randomVectorSupplier;
+import static org.opensearch.knn.common.KNNConstants.DIMENSION;
 
 /**
  * Integration tests for derived source feature for vector fields. Currently, with derived source, there are
@@ -293,4 +297,389 @@ public class DerivedSourceIT extends DerivedSourceTestCase {
             () -> createKnnIndex(indexName, Settings.builder().put("index.knn.derived_source.enabled", true).build(), mapping)
         );
     }
+
+    @SneakyThrows
+    public void testSourceFiltering_withVariousIncludeExcludeCombinations() {
+        String indexName = getIndexName("source-filtering", "combinations", false);
+        String VECTOR_FIELD_1 = "test_vector";
+        String VECTOR_FIELD_2 = "temp_vector";
+        String VECTOR_FIELD_3 = "user_vector";
+        String TEXT_FIELD = "description";
+        int DIMENSION = 3;
+
+        // Create index with multiple vector fields and a text field
+        XContentBuilder mappingBuilder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject(KNNConstants.PROPERTIES)
+            .startObject(VECTOR_FIELD_1)
+            .field(KNNConstants.TYPE, KNNConstants.TYPE_KNN_VECTOR)
+            .field(KNNConstants.DIMENSION, DIMENSION)
+            .endObject()
+            .startObject(VECTOR_FIELD_2)
+            .field(KNNConstants.TYPE, KNNConstants.TYPE_KNN_VECTOR)
+            .field(KNNConstants.DIMENSION, DIMENSION)
+            .endObject()
+            .startObject(VECTOR_FIELD_3)
+            .field(KNNConstants.TYPE, KNNConstants.TYPE_KNN_VECTOR)
+            .field(KNNConstants.DIMENSION, DIMENSION)
+            .endObject()
+            .startObject(TEXT_FIELD)
+            .field(KNNConstants.TYPE, "text")
+            .endObject()
+            .endObject()
+            .endObject();
+
+        createKnnIndex(
+            indexName,
+            Settings.builder().put("index.knn", true).put("index.knn.derived_source.enabled", true).build(),
+            mappingBuilder.toString()
+        );
+
+        // Index a document with all fields
+        XContentBuilder docBuilder = XContentFactory.jsonBuilder()
+            .startObject()
+            .array(VECTOR_FIELD_1, 1.0f, 2.0f, 3.0f)
+            .array(VECTOR_FIELD_2, 4.0f, 5.0f, 6.0f)
+            .array(VECTOR_FIELD_3, 7.0f, 8.0f, 9.0f)
+            .field(TEXT_FIELD, "test description")
+            .endObject();
+        addKnnDoc(indexName, "1", docBuilder.toString());
+
+        refreshIndex(indexName);
+
+        // Test 1: No filtering - all fields returned
+        assertSourceFiltering(
+            indexName,
+            null,  // includes
+            null,  // excludes
+            new String[] { VECTOR_FIELD_1, VECTOR_FIELD_2, VECTOR_FIELD_3, TEXT_FIELD },  // expected present
+            new String[] {}  // expected absent
+        );
+
+        // Test 2: Only includes - only specified fields returned
+        assertSourceFiltering(
+            indexName,
+            new String[] { VECTOR_FIELD_1, TEXT_FIELD },
+            null,
+            new String[] { VECTOR_FIELD_1, TEXT_FIELD },
+            new String[] { VECTOR_FIELD_2, VECTOR_FIELD_3 }
+        );
+
+        // Test 3: Only excludes - all except specified fields returned
+        assertSourceFiltering(
+            indexName,
+            null,
+            new String[] { VECTOR_FIELD_1 },
+            new String[] { VECTOR_FIELD_2, VECTOR_FIELD_3, TEXT_FIELD },
+            new String[] { VECTOR_FIELD_1 }
+        );
+
+        // Test 4: Both includes and excludes - excludes override includes
+        assertSourceFiltering(
+            indexName,
+            new String[] { VECTOR_FIELD_1, VECTOR_FIELD_2, TEXT_FIELD },
+            new String[] { VECTOR_FIELD_2 },
+            new String[] { VECTOR_FIELD_1, TEXT_FIELD },
+            new String[] { VECTOR_FIELD_2, VECTOR_FIELD_3 }
+        );
+
+        // Test 5: Wildcard includes - only matching fields returned
+        assertSourceFiltering(
+            indexName,
+            new String[] { "t*" },  // matches test_vector, temp_vector
+            null,
+            new String[] { VECTOR_FIELD_1, VECTOR_FIELD_2 },
+            new String[] { VECTOR_FIELD_3, TEXT_FIELD }
+        );
+
+        // Test 6: Wildcard excludes - all except matching fields returned
+        assertSourceFiltering(
+            indexName,
+            null,
+            new String[] { "t*" },  // excludes test_vector, temp_vector
+            new String[] { VECTOR_FIELD_3, TEXT_FIELD },
+            new String[] { VECTOR_FIELD_1, VECTOR_FIELD_2 }
+        );
+
+        // Test 7: Wildcard includes with specific excludes
+        assertSourceFiltering(
+            indexName,
+            new String[] { "t*", VECTOR_FIELD_3 },  // includes test_vector, temp_vector, user_vector
+            new String[] { VECTOR_FIELD_1 },  // excludes test_vector
+            new String[] { VECTOR_FIELD_2, VECTOR_FIELD_3 },
+            new String[] { VECTOR_FIELD_1, TEXT_FIELD }
+        );
+
+        // Test 8: Empty includes array - all fields returned (no filtering)
+        assertSourceFiltering(
+            indexName,
+            new String[] {},
+            null,
+            new String[] { VECTOR_FIELD_1, VECTOR_FIELD_2, VECTOR_FIELD_3, TEXT_FIELD },
+            new String[] {}
+        );
+
+        // Test 9: Empty excludes array - all fields returned (no filtering)
+        assertSourceFiltering(
+            indexName,
+            null,
+            new String[] {},
+            new String[] { VECTOR_FIELD_1, VECTOR_FIELD_2, VECTOR_FIELD_3, TEXT_FIELD },
+            new String[] {}
+        );
+    }
+
+    @SneakyThrows
+    public void testDerivedSource_withMappingLevelSourceFiltering() {
+        String VECTOR_FIELD_1 = "included_vector";
+        String VECTOR_FIELD_2 = "excluded_vector";
+        String TEXT_FIELD = "title";
+        int dimension = 3;
+
+        // Test 1: Index with _source.includes - only included_vector should be in source
+        String indexWithIncludes = getIndexName("source-mapping", "includes", false);
+        XContentBuilder mappingWithIncludes = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("_source")
+            .array("includes", VECTOR_FIELD_1, TEXT_FIELD)
+            .endObject()
+            .startObject(KNNConstants.PROPERTIES)
+            .startObject(VECTOR_FIELD_1)
+            .field(KNNConstants.TYPE, KNNConstants.TYPE_KNN_VECTOR)
+            .field(DIMENSION, dimension)
+            .endObject()
+            .startObject(VECTOR_FIELD_2)
+            .field(KNNConstants.TYPE, KNNConstants.TYPE_KNN_VECTOR)
+            .field(DIMENSION, dimension)
+            .endObject()
+            .startObject(TEXT_FIELD)
+            .field(KNNConstants.TYPE, "text")
+            .endObject()
+            .endObject()
+            .endObject();
+
+        createKnnIndex(
+            indexWithIncludes,
+            Settings.builder().put("index.knn", true).put("index.knn.derived_source.enabled", true).build(),
+            mappingWithIncludes.toString()
+        );
+
+        XContentBuilder docBuilder1 = XContentFactory.jsonBuilder()
+            .startObject()
+            .array(VECTOR_FIELD_1, 1.0f, 2.0f, 3.0f)
+            .array(VECTOR_FIELD_2, 4.0f, 5.0f, 6.0f)
+            .field(TEXT_FIELD, "test document")
+            .endObject();
+        addKnnDoc(indexWithIncludes, "1", docBuilder1.toString());
+        refreshIndex(indexWithIncludes);
+
+        // Verify - included_vector should be present (derived), excluded_vector should be absent
+        assertMappingLevelSourceFiltering(indexWithIncludes, new String[] { VECTOR_FIELD_1, TEXT_FIELD }, new String[] { VECTOR_FIELD_2 });
+
+        // Test 2: Index with _source.excludes - excluded_vector should not be in source
+        String indexWithExcludes = getIndexName("source-mapping", "excludes", false);
+        XContentBuilder mappingWithExcludes = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("_source")
+            .array("excludes", VECTOR_FIELD_2)
+            .endObject()
+            .startObject(KNNConstants.PROPERTIES)
+            .startObject(VECTOR_FIELD_1)
+            .field(KNNConstants.TYPE, KNNConstants.TYPE_KNN_VECTOR)
+            .field(DIMENSION, dimension)
+            .endObject()
+            .startObject(VECTOR_FIELD_2)
+            .field(KNNConstants.TYPE, KNNConstants.TYPE_KNN_VECTOR)
+            .field(DIMENSION, dimension)
+            .endObject()
+            .startObject(TEXT_FIELD)
+            .field(KNNConstants.TYPE, "text")
+            .endObject()
+            .endObject()
+            .endObject();
+
+        createKnnIndex(
+            indexWithExcludes,
+            Settings.builder().put("index.knn", true).put("index.knn.derived_source.enabled", true).build(),
+            mappingWithExcludes.toString()
+        );
+
+        XContentBuilder docBuilder2 = XContentFactory.jsonBuilder()
+            .startObject()
+            .array(VECTOR_FIELD_1, 1.0f, 2.0f, 3.0f)
+            .array(VECTOR_FIELD_2, 4.0f, 5.0f, 6.0f)
+            .field(TEXT_FIELD, "test document")
+            .endObject();
+        addKnnDoc(indexWithExcludes, "1", docBuilder2.toString());
+        refreshIndex(indexWithExcludes);
+
+        // Verify
+        assertMappingLevelSourceFiltering(indexWithExcludes, new String[] { VECTOR_FIELD_1, TEXT_FIELD }, new String[] { VECTOR_FIELD_2 });
+
+        // Test 3: Index with both _source.includes and _source.excludes - excludes override includes
+        String indexWithBoth = getIndexName("source-mapping", "both", false);
+        XContentBuilder mappingWithBoth = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("_source")
+            .array("includes", VECTOR_FIELD_1, VECTOR_FIELD_2, TEXT_FIELD)
+            .array("excludes", VECTOR_FIELD_2)
+            .endObject()
+            .startObject(KNNConstants.PROPERTIES)
+            .startObject(VECTOR_FIELD_1)
+            .field(KNNConstants.TYPE, KNNConstants.TYPE_KNN_VECTOR)
+            .field(DIMENSION, dimension)
+            .endObject()
+            .startObject(VECTOR_FIELD_2)
+            .field(KNNConstants.TYPE, KNNConstants.TYPE_KNN_VECTOR)
+            .field(DIMENSION, dimension)
+            .endObject()
+            .startObject(TEXT_FIELD)
+            .field(KNNConstants.TYPE, "text")
+            .endObject()
+            .endObject()
+            .endObject();
+
+        createKnnIndex(
+            indexWithBoth,
+            Settings.builder().put("index.knn", true).put("index.knn.derived_source.enabled", true).build(),
+            mappingWithBoth.toString()
+        );
+
+        XContentBuilder docBuilder3 = XContentFactory.jsonBuilder()
+            .startObject()
+            .array(VECTOR_FIELD_1, 1.0f, 2.0f, 3.0f)
+            .array(VECTOR_FIELD_2, 4.0f, 5.0f, 6.0f)
+            .field(TEXT_FIELD, "test document")
+            .endObject();
+        addKnnDoc(indexWithBoth, "1", docBuilder3.toString());
+        refreshIndex(indexWithBoth);
+
+        // Verify - excludes should override includes
+        assertMappingLevelSourceFiltering(indexWithBoth, new String[] { VECTOR_FIELD_1, TEXT_FIELD }, new String[] { VECTOR_FIELD_2 });
+
+        // Test 4: Wildcard includes
+        String indexWithWildcardIncludes = getIndexName("source-mapping", "wildcard-includes", false);
+        XContentBuilder mappingWithWildcardIncludes = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("_source")
+            .array("includes", "included_*", TEXT_FIELD)
+            .endObject()
+            .startObject(KNNConstants.PROPERTIES)
+            .startObject(VECTOR_FIELD_1)
+            .field(KNNConstants.TYPE, KNNConstants.TYPE_KNN_VECTOR)
+            .field(DIMENSION, dimension)
+            .endObject()
+            .startObject(VECTOR_FIELD_2)
+            .field(KNNConstants.TYPE, KNNConstants.TYPE_KNN_VECTOR)
+            .field(DIMENSION, dimension)
+            .endObject()
+            .startObject(TEXT_FIELD)
+            .field(KNNConstants.TYPE, "text")
+            .endObject()
+            .endObject()
+            .endObject();
+
+        createKnnIndex(
+            indexWithWildcardIncludes,
+            Settings.builder().put("index.knn", true).put("index.knn.derived_source.enabled", true).build(),
+            mappingWithWildcardIncludes.toString()
+        );
+
+        XContentBuilder docBuilder4 = XContentFactory.jsonBuilder()
+            .startObject()
+            .array(VECTOR_FIELD_1, 1.0f, 2.0f, 3.0f)
+            .array(VECTOR_FIELD_2, 4.0f, 5.0f, 6.0f)
+            .field(TEXT_FIELD, "test document")
+            .endObject();
+        addKnnDoc(indexWithWildcardIncludes, "1", docBuilder4.toString());
+        refreshIndex(indexWithWildcardIncludes);
+
+        // Verify - only included_vector matches wildcard
+        assertMappingLevelSourceFiltering(
+            indexWithWildcardIncludes,
+            new String[] { VECTOR_FIELD_1, TEXT_FIELD },
+            new String[] { VECTOR_FIELD_2 }
+        );
+
+        // Test 5: Wildcard excludes
+        String indexWithWildcardExcludes = getIndexName("source-mapping", "wildcard-excludes", false);
+        XContentBuilder mappingWithWildcardExcludes = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("_source")
+            .array("excludes", "excluded_*")
+            .endObject()
+            .startObject(KNNConstants.PROPERTIES)
+            .startObject(VECTOR_FIELD_1)
+            .field(KNNConstants.TYPE, KNNConstants.TYPE_KNN_VECTOR)
+            .field(DIMENSION, dimension)
+            .endObject()
+            .startObject(VECTOR_FIELD_2)
+            .field(KNNConstants.TYPE, KNNConstants.TYPE_KNN_VECTOR)
+            .field(DIMENSION, dimension)
+            .endObject()
+            .startObject(TEXT_FIELD)
+            .field(KNNConstants.TYPE, "text")
+            .endObject()
+            .endObject()
+            .endObject();
+
+        createKnnIndex(
+            indexWithWildcardExcludes,
+            Settings.builder().put("index.knn", true).put("index.knn.derived_source.enabled", true).build(),
+            mappingWithWildcardExcludes.toString()
+        );
+
+        XContentBuilder docBuilder5 = XContentFactory.jsonBuilder()
+            .startObject()
+            .array(VECTOR_FIELD_1, 1.0f, 2.0f, 3.0f)
+            .array(VECTOR_FIELD_2, 4.0f, 5.0f, 6.0f)
+            .field(TEXT_FIELD, "test document")
+            .endObject();
+        addKnnDoc(indexWithWildcardExcludes, "1", docBuilder5.toString());
+        refreshIndex(indexWithWildcardExcludes);
+
+        // Verify - excluded_vector matches wildcard
+        assertMappingLevelSourceFiltering(
+            indexWithWildcardExcludes,
+            new String[] { VECTOR_FIELD_1, TEXT_FIELD },
+            new String[] { VECTOR_FIELD_2 }
+        );
+    }
+
+    @SneakyThrows
+    private void assertMappingLevelSourceFiltering(String indexName, String[] expectedPresent, String[] expectedAbsent) {
+        XContentBuilder searchBuilder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("query")
+            .startObject("match_all")
+            .endObject()
+            .endObject()
+            .endObject();
+
+        Request searchRequest = new Request("POST", "/" + indexName + "/_search");
+        searchRequest.setJsonEntity(searchBuilder.toString());
+        Response response = client().performRequest(searchRequest);
+
+        Map<String, Object> responseMap = entityAsMap(response);
+        Map<String, Object> hits = (Map<String, Object>) responseMap.get("hits");
+        List<Map<String, Object>> hitsList = (List<Map<String, Object>>) hits.get("hits");
+
+        assertEquals("Expected 1 hit", 1, hitsList.size());
+        Map<String, Object> source = (Map<String, Object>) hitsList.get(0).get("_source");
+
+        for (String field : expectedPresent) {
+            assertTrue(
+                String.format(Locale.ROOT, "Field '%s' should be present in _source for index '%s'", field, indexName),
+                source.containsKey(field)
+            );
+        }
+
+        for (String field : expectedAbsent) {
+            assertFalse(
+                String.format(Locale.ROOT, "Field '%s' should be absent from _source for index '%s'", field, indexName),
+                source.containsKey(field)
+            );
+        }
+    }
+
 }

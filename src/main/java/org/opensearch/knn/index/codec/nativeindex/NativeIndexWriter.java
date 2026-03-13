@@ -9,6 +9,7 @@ import lombok.AllArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 import org.apache.lucene.codecs.CodecUtil;
 import org.apache.lucene.index.FieldInfo;
+import org.apache.lucene.index.MergePolicy;
 import org.apache.lucene.index.SegmentWriteState;
 import org.apache.lucene.store.IndexOutput;
 import org.opensearch.common.Nullable;
@@ -121,9 +122,17 @@ public class NativeIndexWriter {
         }
 
         long bytesPerVector = knnVectorValues.bytesPerVector();
-        startMergeStats(totalLiveDocs, bytesPerVector);
-        buildAndWriteIndex(knnVectorValuesSupplier, totalLiveDocs, false);
-        endMergeStats(totalLiveDocs, bytesPerVector);
+
+        try {
+            startMergeStats(totalLiveDocs, bytesPerVector);
+            buildAndWriteIndex(knnVectorValuesSupplier, totalLiveDocs, false);
+            endMergeStats(totalLiveDocs, bytesPerVector);
+        } catch (IndexBuildAbortedException ex) {
+            log.warn("Merge Aborted for field {}", fieldInfo.name, ex);
+            throw new MergePolicy.MergeAbortedException("KNN Merge aborted.");
+        } catch (Exception ex) {
+            log.error("Merge exception happened for field {}", fieldInfo.name, ex);
+        }
     }
 
     private void buildAndWriteIndex(final Supplier<KNNVectorValues<?>> knnVectorValuesSupplier, int totalLiveDocs, boolean isFlush)
@@ -153,8 +162,7 @@ public class NativeIndexWriter {
             NativeIndexBuildStrategy indexBuilder = indexBuilderFactory.getBuildStrategy(
                 fieldInfo,
                 totalLiveDocs,
-                knnVectorValuesSupplier.get(),
-                nativeIndexParams
+                knnVectorValuesSupplier.get()
             );
             indexBuilder.buildAndWriteIndex(nativeIndexParams);
             CodecUtil.writeFooter(output);
@@ -175,7 +183,7 @@ public class NativeIndexWriter {
         final Map<String, Object> parameters;
         VectorDataType vectorDataType;
         if (quantizationState != null) {
-            vectorDataType = QuantizationService.getInstance().getVectorDataTypeForTransfer(fieldInfo, state.segmentInfo.getVersion());
+            vectorDataType = QuantizationService.getInstance().getVectorDataTypeForTransfer(fieldInfo);
         } else {
             vectorDataType = extractVectorDataType(fieldInfo);
         }
@@ -274,7 +282,7 @@ public class NativeIndexWriter {
         parameters.put(KNNConstants.INDEX_THREAD_QTY, KNNSettings.getIndexThreadQty());
         parameters.put(KNNConstants.MODEL_ID, fieldInfo.attributes().get(MODEL_ID));
         parameters.put(KNNConstants.MODEL_BLOB_PARAMETER, model.getModelBlob());
-        if (FieldInfoExtractor.extractQuantizationConfig(fieldInfo, state.segmentInfo.getVersion()) != QuantizationConfig.EMPTY) {
+        if (FieldInfoExtractor.extractQuantizationConfig(fieldInfo) != QuantizationConfig.EMPTY) {
             IndexUtil.updateVectorDataTypeToParameters(parameters, VectorDataType.BINARY);
         } else {
             IndexUtil.updateVectorDataTypeToParameters(parameters, model.getModelMetadata().getVectorDataType());

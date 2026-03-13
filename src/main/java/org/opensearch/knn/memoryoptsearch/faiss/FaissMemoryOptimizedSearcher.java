@@ -5,7 +5,9 @@
 
 package org.opensearch.knn.memoryoptsearch.faiss;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.apache.lucene.codecs.hnsw.FlatVectorsScorer;
+import org.apache.lucene.index.ByteVectorValues;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FloatVectorValues;
 import org.apache.lucene.index.KnnVectorValues;
@@ -18,12 +20,12 @@ import org.apache.lucene.search.knn.KnnSearchStrategy;
 import org.apache.lucene.store.IndexInput;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.IOSupplier;
-import org.apache.lucene.util.Version;
 import org.apache.lucene.util.hnsw.HnswGraphSearcher;
 import org.apache.lucene.util.hnsw.OrdinalTranslatedKnnCollector;
 import org.apache.lucene.util.hnsw.RandomVectorScorer;
 import org.opensearch.knn.common.FieldInfoExtractor;
 import org.opensearch.knn.common.KNNConstants;
+import org.opensearch.knn.common.RobustUniqueRandomIterator;
 import org.opensearch.knn.index.KNNVectorSimilarityFunction;
 import org.opensearch.knn.index.SpaceType;
 import org.opensearch.knn.index.engine.qframe.QuantizationConfig;
@@ -32,12 +34,23 @@ import org.opensearch.knn.memoryoptsearch.VectorSearcher;
 import org.opensearch.knn.memoryoptsearch.faiss.cagra.FaissCagraHNSW;
 
 import java.io.IOException;
-import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * This searcher directly reads FAISS index file via the provided {@link IndexInput} then perform vector search on it.
  */
 public class FaissMemoryOptimizedSearcher implements VectorSearcher {
+
+    /**
+     * Exception thrown during warmup initialization when the search cannot proceed.
+     * This encapsulates expected exceptions like NullPointerException (from null target vectors)
+     * and UnsupportedOperationException (from vector encoding mismatches with quantized indices).
+     */
+    public static class WarmupInitializationException extends RuntimeException {
+        public WarmupInitializationException(String message) {
+            super(message);
+        }
+    }
+
     private final IndexInput indexInput;
     private final FaissIndex faissIndex;
     private final FlatVectorsScorer flatVectorsScorer;
@@ -63,7 +76,7 @@ public class FaissMemoryOptimizedSearcher implements VectorSearcher {
         SpaceType spaceType = null;
         if (fieldInfo != null) {
             // Extract ADC info from fieldInfo to determine scorer.
-            final QuantizationConfig quantizationConfig = FieldInfoExtractor.extractQuantizationConfig(fieldInfo, Version.LATEST);
+            final QuantizationConfig quantizationConfig = FieldInfoExtractor.extractQuantizationConfig(fieldInfo);
             this.isAdc = quantizationConfig.isEnableADC();
             spaceType = isAdc ? SpaceType.getSpace(fieldInfo.getAttribute(KNNConstants.SPACE_TYPE)) : null;
         }
@@ -132,6 +145,17 @@ public class FaissMemoryOptimizedSearcher implements VectorSearcher {
         );
     }
 
+    /**
+     * Returns byte vector values from the FAISS index.
+     *
+     * @return byte vector values
+     * @throws IOException if an I/O error occurs
+     */
+    @Override
+    public ByteVectorValues getByteVectorValues() throws IOException {
+        return faissIndex.getByteValues(getSlicedIndexInput());
+    }
+
     @Override
     public void close() throws IOException {
         indexInput.close();
@@ -186,10 +210,13 @@ public class FaissMemoryOptimizedSearcher implements VectorSearcher {
         return indexInput.slice("FaissMemoryOptimizedSearcher", 0, fileSize);
     }
 
-    private KnnCollector createKnnCollector(final KnnCollector knnCollector, final RandomVectorScorer scorer) {
+    @VisibleForTesting
+    KnnCollector createKnnCollector(final KnnCollector knnCollector, final RandomVectorScorer scorer) {
         final KnnCollector ordinalTranslatedKnnCollector = new OrdinalTranslatedKnnCollector(knnCollector, scorer::ordToDoc);
 
-        if (hnsw instanceof FaissCagraHNSW cagraHNSW) {
+        if (hnsw instanceof FaissCagraHNSW cagraHNSW && (knnCollector.getSearchStrategy() instanceof KnnSearchStrategy.Seeded) == false) {
+            // If there are provided entry points, then we should honor it and ensure searching to start based on them instead of
+            // search with randomly selected points.
             return new KnnCollector.Decorator(ordinalTranslatedKnnCollector) {
                 @Override
                 public KnnSearchStrategy getSearchStrategy() {
@@ -200,9 +227,9 @@ public class FaissMemoryOptimizedSearcher implements VectorSearcher {
                     );
                 }
             };
-        } else {
-            return ordinalTranslatedKnnCollector;
         }
+
+        return ordinalTranslatedKnnCollector;
     }
 
     /**
@@ -224,8 +251,14 @@ public class FaissMemoryOptimizedSearcher implements VectorSearcher {
         }
 
         private static DocIdSetIterator generateRandomEntryPoints(final int numberOfEntryPoints, int totalNumberOfVectors) {
+            if (numberOfEntryPoints >= totalNumberOfVectors) {
+                return DocIdSetIterator.all(totalNumberOfVectors);
+            }
             return new DocIdSetIterator() {
-                int numPopulatedVectors = 0;
+                final RobustUniqueRandomIterator robustUniqueRandomIterator = new RobustUniqueRandomIterator(
+                    totalNumberOfVectors,
+                    numberOfEntryPoints
+                );
 
                 @Override
                 public int docID() {
@@ -234,13 +267,7 @@ public class FaissMemoryOptimizedSearcher implements VectorSearcher {
 
                 @Override
                 public int nextDoc() {
-                    if (numPopulatedVectors < numberOfEntryPoints) {
-                        ++numPopulatedVectors;
-                        // It is fine to populate the same doc ids here, the same vectors will not be visited more than once with bitset.
-                        return ThreadLocalRandom.current().nextInt(totalNumberOfVectors);
-                    }
-
-                    return NO_MORE_DOCS;
+                    return robustUniqueRandomIterator.next();
                 }
 
                 @Override

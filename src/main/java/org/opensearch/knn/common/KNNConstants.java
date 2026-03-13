@@ -63,6 +63,7 @@ public class KNNConstants {
     public static final String MODEL_BLOB_PARAMETER = "model_blob";
     public static final String MODEL_INDEX_MAPPING_PATH = "mappings/model-index.json";
     public static final String MODEL_INDEX_NAME = ".opensearch-knn-models";
+    public static final String TASKS_INDEX_NAME = ".tasks";
     public static final String PLUGIN_NAME = "knn";
     public static final String MODEL_METADATA_FIELD = "knn-models";
     public static final Integer BYTES_PER_KILOBYTES = 1024;
@@ -228,4 +229,9 @@ public class KNNConstants {
     public static final String VECTOR_FIELD_DATA_TYPE = "vector_field_data_type";
     public static final String VECTOR_FIELD_SPACE_TYPE = "vector_field_space_type";
     public static final String MMR_RERANK_CONTEXT = "mmr.rerank_context";
+
+    // Bit manipulation constants for quantization
+    public static final int BYTE_ALIGNMENT_MASK = 7; // Used for rounding up to nearest byte (Byte.SIZE - 1)
+    // Define here: https://github.com/opensearch-project/remote-vector-index-builder/blob/main/API.md#index-parameters
+    public static final int MIN_DOCS_FOR_REMOTE_INDEX_BUILD = 4;
 }

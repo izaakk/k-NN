@@ -15,7 +15,7 @@ buildscript {
     ext {
         // build.version_qualifier parameter applies to knn plugin artifacts only. OpenSearch version must be set
         // explicitly as 'opensearch.version' property, for instance opensearch.version=2.0.0-rc1-SNAPSHOT
-        opensearch_version = System.getProperty("opensearch.version", "3.4.0-SNAPSHOT")
+        opensearch_version = System.getProperty("opensearch.version", "3.6.0-SNAPSHOT")
         version_qualifier = System.getProperty("build.version_qualifier", "")
         opensearch_group = "org.opensearch"
         isSnapshot = "true" == System.getProperty("build.snapshot", "true")
@@ -228,8 +228,9 @@ allprojects {
         version += "-SNAPSHOT"
     }
     apply from: rootProject.file('build-tools/repositories.gradle').absoluteFile
-    plugins.withId('java') {
-        sourceCompatibility = targetCompatibility = "21"
+    java {
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     afterEvaluate {
@@ -321,6 +322,27 @@ if (!usingRemoteCluster) {
     }
 }
 
+tasks.register('validateLibraryUsage') {
+    dependsOn compileJava
+    doLast {
+        fileTree('build/classes').include('**/*.class').each { classFile ->
+            if (classFile.absolutePath.contains('KNNLibraryLoader')) return
+
+            def bytes = classFile.bytes
+            def foundLoadLibrary = scanForLoadLibrary(bytes)
+
+            if (foundLoadLibrary) {
+                throw new GradleException("System.loadLibrary call found in ${classFile.absolutePath}. Add any JNI library loading functionality into KNNLibraryLoader!")
+            }
+        }
+    }
+}
+
+static def scanForLoadLibrary(byte[] classBytes) {
+    def bytesAsString = new String(classBytes, "ISO-8859-1")
+    return bytesAsString.contains("java/lang/System") && bytesAsString.contains("loadLibrary")
+}
+
 check.dependsOn spotlessCheck
 check.dependsOn jacocoTestReport
 
@@ -346,6 +368,102 @@ task release(type: Copy, group: 'build') {
     eachFile { it.path = it.path - "opensearch/" }
 }
 
+tasks.register('generateTaskGraph') {
+    group = 'documentation'
+    description = 'Generates a Mermaid graph of the build task dependencies'
+    
+    doLast {
+        def buildTask = project.tasks.getByName('build')
+        def taskDeps = [:]
+        def mustRunAfter = [:]
+        
+        def finalizedBy = [:]
+        
+        def collectDeps
+        collectDeps = { task ->
+            if (taskDeps.containsKey(task.name)) return
+            
+            def deps = task.taskDependencies.getDependencies(task)
+            def mustRunAfterTasks = task.mustRunAfter.getDependencies(task)
+            def finalizedByTasks = task.finalizedBy.getDependencies(task)
+            
+            finalizedBy[task.name] = finalizedByTasks.collect { it.name }.findAll { it != task.name }
+
+            // Combine regular dependencies and mustRunAfter, filter out self-dependencies
+            def allDeps = (deps + mustRunAfterTasks).collect { it.name }.unique().findAll { it != task.name }
+            taskDeps[task.name] = allDeps
+            
+            (deps + mustRunAfterTasks + finalizedByTasks).each { collectDeps(it) }
+        }
+        
+        collectDeps(buildTask)
+        
+        def taskToLevel = [:]
+        
+        def calculateLevel
+        calculateLevel = { taskName ->
+            if (taskToLevel.containsKey(taskName)) {
+                return taskToLevel[taskName]
+            }
+            
+            def allConstraints = taskDeps[taskName] ?: []
+            
+            if (allConstraints.isEmpty()) {
+                taskToLevel[taskName] = 0
+                return 0
+            }
+            
+            def depLevels = allConstraints.collect { calculateLevel(it) }
+            def maxDepLevel = depLevels.isEmpty() ? -1 : depLevels.max()
+            def level = maxDepLevel + 1
+            taskToLevel[taskName] = level
+            return level
+        }
+        
+        // Proper transitive reduction
+        def reducedDeps = [:]
+        
+        def isReachable
+        isReachable = { from, to, visited = [] as Set ->
+            if (from == to) return true
+            if (visited.contains(from)) return false
+            visited.add(from)
+            return (taskDeps[from] ?: []).any { dep -> isReachable(dep, to, visited) }
+        }
+        
+        taskDeps.each { taskName, deps ->
+            def directDeps = deps.findAll { dep ->
+                !deps.any { otherDep -> otherDep != dep && isReachable(otherDep, dep) }
+            }
+            reducedDeps[taskName] = directDeps
+        }
+        
+        def mermaid = [
+            '%%{init: {"flowchart": {"nodeSpacing": 50, "rankSpacing": 80}}}%%',
+            'graph TD'
+        ]
+        
+        // Generate connections with reduced dependencies
+        reducedDeps.each { taskName, deps ->
+            deps.each { dep ->
+                mermaid << "    ${dep} --> ${taskName}"
+            }
+        }
+        
+        // Generate bold arrows for finalizedBy relationships
+        finalizedBy.each { taskName, finalizedTasks ->
+            finalizedTasks.each { finalizedTask ->
+                mermaid << "    ${taskName} ==> ${finalizedTask}"
+            }
+        }
+        
+        def outputFile = file('GRADLE_GRAPH.md')
+        outputFile.text = "# Gradle Build Task Graph\n\nDependency DAG with transitive dependencies removed for clarity.\n\nPrompt AI with questions like 'Analyzing GRADLE_GRAPH.md, does buildJniTest come before integTest?'\n\nRegenerate with `./gradlew generateTaskGraph`\n\n```mermaid\n${mermaid.join('\n')}\n```\n"
+        
+        println "Task graph generated in GRADLE_GRAPH.md"
+    }
+}
+
 
 //****************************************************************************/
 // Dependencies
@@ -365,7 +483,9 @@ dependencies {
     testImplementation group: 'org.objenesis', name: 'objenesis', version: "${versions.objenesis}"
     testImplementation group: 'net.bytebuddy', name: 'byte-buddy-agent', version: "${versions.bytebuddy}"
     testImplementation("com.google.guava:guava:${versions.guava}")
-    testFixturesImplementation("com.google.guava:guava:${versions.guava}")
+    testFixturesImplementation("com.google.guava:guava:${versions.guava}") {
+        exclude group: 'com.google.errorprone', module: 'error_prone_annotations'
+    }
     // json-path 2.9.0 depends on slf4j 2.0.11, which conflicts with the version used by OpenSearch core.
     // Excluding slf4j here since json-path is only used for testing, and logging failures in this context are acceptable.
     testFixturesImplementation('com.jayway.jsonpath:json-path:2.9.0') {
@@ -380,6 +500,8 @@ dependencies {
     api "net.java.dev.jna:jna-platform:${versions.jna}"
     implementation "org.slf4j:slf4j-api:${versions.slf4j}"
     zipArchive group: 'org.opensearch.plugin', name:'opensearch-security', version: "${opensearch_build}"
+    // Commenting this out till CustomCodec plugin is ready after Lucene 10.4.0 upgrade in OS Core.
+    zipArchive group: 'org.opensearch.plugin', name:'opensearch-custom-codecs', version: "${opensearch_build}"
 }
 
 task windowsPatches(type:Exec) {
@@ -448,12 +570,30 @@ tasks.register('buildJniLib', Exec) {
     commandLine args
 }
 
-test {
+jar.finalizedBy validateLibraryUsage
+
+tasks.register('buildJniTest', Test) {
     dependsOn buildJniLib
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    systemProperty 'tests.security.manager', 'false'
+    systemProperty "java.library.path", "$rootDir/jni/build/release"
+    systemProperty "jdk.attach.allowAttachSelf", true
+    include '**/*BT*' // Build tests will be denoted with BT to show they come before other tests
+    if (Os.isFamily(Os.FAMILY_WINDOWS)) {
+        environment('PATH', System.getenv('PATH') + ";$rootDir/jni/build/release" + ";$rootDir/src/main/resources/windowsDependencies")
+    }
+}
+
+test {
+    dependsOn buildJniTest
+    // This will ensure that Unit test also uses optimized Vector Scorers and Pananma APIs
+    jvmArgs '--add-modules=jdk.incubator.vector'
     systemProperty 'tests.security.manager', 'false'
     systemProperty "java.library.path", "$rootDir/jni/build/release"
     //this change enables mockito-inline that supports mocking of static classes/calls
     systemProperty "jdk.attach.allowAttachSelf", true
+    exclude '**/*BT*'
     if (Os.isFamily(Os.FAMILY_WINDOWS)) {
         // Add the paths of built JNI libraries and its dependent libraries to PATH variable in System variables
         environment('PATH', System.getenv('PATH') + ";$rootDir/jni/build/release" + ";$rootDir/src/main/resources/windowsDependencies")
@@ -512,6 +652,10 @@ def commonIntegTest(RestIntegTestTask task, project, integTestDependOnJniLib, op
 
 integTest {
     commonIntegTest(it, project, integTestDependOnJniLib, opensearch_tmp_dir, _numNodes)
+    filter {
+        excludeTestsMatching "org.opensearch.knn.index.RelocationIT"
+    }
+    mustRunAfter test
 }
 
 task integTestRemoteIndexBuild(type: RestIntegTestTask) {
@@ -519,11 +663,22 @@ task integTestRemoteIndexBuild(type: RestIntegTestTask) {
     filter {
         // Temporarily skipping this test class, see: https://github.com/opensearch-project/k-NN/issues/2726
         excludeTestsMatching "org.opensearch.knn.index.SegmentReplicationIT"
+        excludeTestsMatching "org.opensearch.knn.index.RelocationIT"
     }
     systemProperty("test.remoteBuild", System.getProperty("test.remoteBuild"))
     systemProperty("test.bucket", System.getProperty("test.bucket"))
     systemProperty("test.base_path", System.getProperty("test.base_path"))
 }
+
+task integTestMultiNode(type: RestIntegTestTask) {
+    commonIntegTest(it, project, integTestDependOnJniLib, opensearch_tmp_dir, 2)
+    filter {
+        includeTestsMatching "org.opensearch.knn.index.RelocationIT"
+    }
+}
+
+// Make integTest run integTestMultiNode after completion
+integTest.finalizedBy integTestMultiNode
 
 def commonIntegTestClusters(OpenSearchCluster cluster, _numNodes){
     cluster.testDistribution = "ARCHIVE"
@@ -534,6 +689,22 @@ def commonIntegTestClusters(OpenSearchCluster cluster, _numNodes){
     // Optionally install security
     if (System.getProperty("security.enabled") != null) {
         configureSecurityPlugin(cluster)
+    }
+    else {
+        // Only install custom codecs plugin
+        configurations.zipArchive.asFileTree.filter(f -> f.name.contains("custom-codecs")).each {
+            cluster.plugin(provider(new Callable<RegularFile>() {
+                @Override
+                RegularFile call() throws Exception {
+                    return new RegularFile() {
+                        @Override
+                        File getAsFile() {
+                            return it
+                        }
+                }
+            }
+          }))
+       }
     }
 
     cluster.plugin(project.tasks.bundlePlugin.archiveFile)
@@ -548,6 +719,9 @@ def commonIntegTestClusters(OpenSearchCluster cluster, _numNodes){
     // When running integration tests it doesn't forward the --debug-jvm to the cluster anymore
     // i.e. we have to use a custom property to flag when we want to debug opensearch JVM
     // since we also support multi node integration tests we increase debugPort per node
+    cluster.nodes.forEach { node ->
+        node.jvmArgs("-Xmx512m")
+    }
     if (System.getProperty("cluster.debug") != null) {
         def debugPort = 5005
         cluster.nodes.forEach { node ->
@@ -555,6 +729,7 @@ def commonIntegTestClusters(OpenSearchCluster cluster, _numNodes){
             debugPort += 1
         }
     }
+
 
     cluster.systemProperty("java.library.path", "$rootDir/jni/build/release")
     final testSnapshotFolder = file("${buildDir}/testSnapshotFolder")
@@ -581,6 +756,10 @@ testClusters.integTestRemoteIndexBuild {
     keystore 's3.client.default.session_token', "${System.getProperty("session_token")}"
     // Forcing optimistic search for testing
     systemProperty 'mem_opt_srch.force_reenter', 'true'
+}
+
+testClusters.integTestMultiNode {
+    commonIntegTestClusters(it, 2)
 }
 
 task integTestRemote(type: RestIntegTestTask) {
