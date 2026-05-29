@@ -1,19 +1,19 @@
-From 82862f439bbffa8c6711d5865fe784868d6dfceb Mon Sep 17 00:00:00 2001
+From b686dd798b4f1644c613251681307fcad8ad9437 Mon Sep 17 00:00:00 2001
 From: Dooyong Kim <kdooyong@amazon.com>
 Date: Sun, 23 Nov 2025 12:22:40 -0800
-Subject: [PATCH] Add nested search support for IndexBinaryHNSWCagra
+Subject: [PATCH 06/10] Add nested search support for IndexBinaryHNSWCagra
 
 Signed-off-by: Dooyong Kim <kdooyong@amazon.com>
 ---
- faiss/IndexBinaryHNSW.cpp | 103 +++++++++++++++++++++++++++-----------
- tests/test_id_grouper.cpp |  80 +++++++++++++++++++++++++++++
- 2 files changed, 153 insertions(+), 30 deletions(-)
+ faiss/IndexBinaryHNSW.cpp | 109 ++++++++++++++++++++++++++------------
+ tests/test_id_grouper.cpp |  80 ++++++++++++++++++++++++++++
+ 2 files changed, 155 insertions(+), 34 deletions(-)
 
 diff --git a/faiss/IndexBinaryHNSW.cpp b/faiss/IndexBinaryHNSW.cpp
-index 02646a8fd..a1db923b9 100644
+index 945e5c67..b7a82920 100644
 --- a/faiss/IndexBinaryHNSW.cpp
 +++ b/faiss/IndexBinaryHNSW.cpp
-@@ -377,6 +377,48 @@ void IndexBinaryHNSWCagra::add(idx_t n, const uint8_t* x) {
+@@ -372,6 +372,50 @@ void IndexBinaryHNSWCagra::add(idx_t n, const uint8_t* x) {
      IndexBinaryHNSW::add(n, x);
  }
  
@@ -56,15 +56,17 @@ index 02646a8fd..a1db923b9 100644
 +
 +            res.end();
 +        }
++#pragma omp critical
++        { hnsw_stats.combine(search_stats); }
 +    }
 +}
 +
  void IndexBinaryHNSWCagra::search(
          idx_t n,
          const uint8_t* x,
-@@ -388,10 +430,6 @@ void IndexBinaryHNSWCagra::search(
-         IndexBinaryHNSW::search(n, x, k, distances, labels, params);
-     } else {
+@@ -390,10 +434,6 @@ void IndexBinaryHNSWCagra::search(
+                 "num_base_level_search_entrypoints must be > 0");
+ 
          float* distances_f = (float*)distances;
 -
 -        using RH = HeapBlockResultHandler<HNSW::C>;
@@ -73,7 +75,7 @@ index 02646a8fd..a1db923b9 100644
          std::vector<storage_idx_t> nearest(n);
          std::vector<float> nearest_d(n);
  
-@@ -420,38 +458,43 @@ void IndexBinaryHNSWCagra::search(
+@@ -422,42 +462,43 @@ void IndexBinaryHNSWCagra::search(
                      nearest[i] >= 0, "Could not find a valid entrypoint.");
          }
  
@@ -101,6 +103,10 @@ index 02646a8fd..a1db923b9 100644
 -                        params);
 -
 -                res.end();
+-            }
+-#pragma omp critical
+-            {
+-                hnsw_stats.combine(search_stats);
 -            }
 +        if (params && params->grp) {
 +            using RH = GroupedHeapBlockResultHandler<HNSW::C>;
@@ -135,7 +141,7 @@ index 02646a8fd..a1db923b9 100644
          }
  
  #pragma omp parallel for
-         for (int i = 0; i < n * k; ++i) {
+         for (idx_t i = 0; i < n * k; ++i) {
              distances[i] = std::round(distances_f[i]);
          }
 -    }
@@ -144,7 +150,7 @@ index 02646a8fd..a1db923b9 100644
  
  } // namespace faiss
 diff --git a/tests/test_id_grouper.cpp b/tests/test_id_grouper.cpp
-index 7c79ddc79..df5dde737 100644
+index 7c79ddc7..df5dde73 100644
 --- a/tests/test_id_grouper.cpp
 +++ b/tests/test_id_grouper.cpp
 @@ -482,3 +482,83 @@ TEST(IdGrouper, bitmap_with_binary_hnsw_idmap) {
@@ -232,5 +238,5 @@ index 7c79ddc79..df5dde737 100644
 +    ASSERT_EQ(numResults, group_ids.size());
 +}
 -- 
-2.50.1 (Apple Git-155)
+2.43.0
 

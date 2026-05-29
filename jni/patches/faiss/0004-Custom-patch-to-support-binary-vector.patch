@@ -1,20 +1,19 @@
-From 96f3352d3ef1ff53b3ffbc8772be9890593da5ce Mon Sep 17 00:00:00 2001
+From 679e9a01d8eb369eb636500257036b9ced1c2ebd Mon Sep 17 00:00:00 2001
 From: Heemin Kim <heemin@amazon.com>
 Date: Fri, 1 Aug 2025 21:52:44 -0700
-Subject: [PATCH] 0004-Custom-patch-to-support-binary-vector
+Subject: [PATCH 04/10] 0004-Custom-patch-to-support-binary-vector
 
 Signed-off-by: Heemin Kim <heemin@amazon.com>
 ---
- faiss/IndexBinaryHNSW.cpp |  62 +++++++++++++-------
- faiss/IndexBinaryIVF.cpp  |  28 +++++++--
+ faiss/IndexBinaryHNSW.cpp |  72 +++++++++++++++--------
  tests/test_id_grouper.cpp | 117 +++++++++++++++++++++++++++++++++++++-
- 3 files changed, 181 insertions(+), 26 deletions(-)
+ 2 files changed, 164 insertions(+), 25 deletions(-)
 
 diff --git a/faiss/IndexBinaryHNSW.cpp b/faiss/IndexBinaryHNSW.cpp
-index 41f68c126..02646a8fd 100644
+index 21f10e53..945e5c67 100644
 --- a/faiss/IndexBinaryHNSW.cpp
 +++ b/faiss/IndexBinaryHNSW.cpp
-@@ -200,6 +200,40 @@ void IndexBinaryHNSW::train(idx_t n, const uint8_t* x) {
+@@ -200,6 +200,46 @@ void IndexBinaryHNSW::train(idx_t n, const uint8_t* x) {
      is_trained = true;
  }
  
@@ -25,25 +24,32 @@ index 41f68c126..02646a8fd 100644
 +        idx_t n,
 +        const uint8_t* x,
 +        BlockResultHandler& bres,
-+        const SearchParameters* params_in) {
-+    const SearchParametersHNSW* params = nullptr;
++        const SearchParameters* params_in,
++        size_t& n1,
++        size_t& n2,
++        size_t& ndis,
++        size_t& nhops) {
 +    const HNSW& hnsw = index->hnsw;
 +
-+    if (params_in) {
-+        params = dynamic_cast<const SearchParametersHNSW*>(params_in);
-+        FAISS_THROW_IF_NOT_MSG(params, "params type invalid");
-+    }
 +#pragma omp parallel
 +    {
 +        VisitedTable vt(index->ntotal);
 +        std::unique_ptr<DistanceComputer> dis(index->get_distance_computer());
 +        typename BlockResultHandler::SingleResultHandler res(bres);
 +
-+#pragma omp for
++#pragma omp for reduction(+ : n1, n2, ndis, nhops)
 +        for (idx_t i = 0; i < n; i++) {
 +            res.begin(i);
 +            dis->set_query((float*)(x + i * index->code_size));
-+            hnsw.search(*dis, res, vt, params);
++            // Given that IndexBinaryHNSW is not an IndexHNSW, we pass nullptr
++            // as the index parameter. This state does not get used in the
++            // search function, as it is merely there to enable Panorama
++            // execution for IndexHNSWFlatPanorama.
++            HNSWStats stats = hnsw.search(*dis, nullptr, res, vt, params_in);
++            n1 += stats.n1;
++            n2 += stats.n2;
++            ndis += stats.ndis;
++            nhops += stats.nhops;
 +            res.end();
 +        }
 +    }
@@ -51,105 +57,52 @@ index 41f68c126..02646a8fd 100644
 +
 +} // anonymous namespace
 +
-+
- void IndexBinaryHNSW::train(idx_t n, const void* x, NumericType numeric_type) {
-     IndexBinary::train(n, x, numeric_type);
- }
-@@ -210,31 +244,21 @@ void IndexBinaryHNSW::search(
-         idx_t k,
-         int32_t* distances,
-         idx_t* labels,
--        const SearchParameters* params) const {
--    FAISS_THROW_IF_NOT_MSG(
--            !params, "search params not supported for this index");
-+        const SearchParameters* params_in) const {
-     FAISS_THROW_IF_NOT(k > 0);
- 
-     // we use the buffer for distances as float but convert them back
+ void IndexBinaryHNSW::search(
+         idx_t n,
+         const uint8_t* x,
+@@ -219,32 +259,16 @@ void IndexBinaryHNSW::search(
      // to int in the end
      float* distances_f = (float*)distances;
  
 -    using RH = HeapBlockResultHandler<HNSW::C>;
 -    RH bres(n, distances_f, labels, k);
 -
+     size_t n1 = 0, n2 = 0, ndis = 0, nhops = 0;
+ 
 -#pragma omp parallel
 -    {
 -        VisitedTable vt(ntotal);
 -        std::unique_ptr<DistanceComputer> dis(get_distance_computer());
 -        RH::SingleResultHandler res(bres);
 -
--#pragma omp for
+-#pragma omp for reduction(+ : n1, n2, ndis, nhops)
 -        for (idx_t i = 0; i < n; i++) {
 -            res.begin(i);
 -            dis->set_query((float*)(x + i * code_size));
--            hnsw.search(*dis, res, vt);
+-            // Given that IndexBinaryHNSW is not an IndexHNSW, we pass nullptr
+-            // as the index parameter. This state does not get used in the
+-            // search function, as it is merely there to enable Panorama
+-            // execution for IndexHNSWFlatPanorama.
+-            HNSWStats stats = hnsw.search(*dis, nullptr, res, vt, params_in);
+-            n1 += stats.n1;
+-            n2 += stats.n2;
+-            ndis += stats.ndis;
+-            nhops += stats.nhops;
 -            res.end();
 -        }
 +    if (params_in && params_in->grp) {
 +        using RH = GroupedHeapBlockResultHandler<HNSW::C>;
 +        RH bres(n, distances_f, labels, k, params_in->grp);
-+        hnsw_search(this, n, x, bres, params_in);
++        hnsw_search(this, n, x, bres, params_in, n1, n2, ndis, nhops);
 +    } else {
 +        using RH = HeapBlockResultHandler<HNSW::C>;
 +        RH bres(n, distances_f, labels, k);
-+        hnsw_search(this, n, x, bres, params_in);
++        hnsw_search(this, n, x, bres, params_in, n1, n2, ndis, nhops);
      }
  
- #pragma omp parallel for
-diff --git a/faiss/IndexBinaryIVF.cpp b/faiss/IndexBinaryIVF.cpp
-index b0edf0914..604f91385 100644
---- a/faiss/IndexBinaryIVF.cpp
-+++ b/faiss/IndexBinaryIVF.cpp
-@@ -120,25 +120,41 @@ void IndexBinaryIVF::search(
-         idx_t k,
-         int32_t* distances,
-         idx_t* labels,
--        const SearchParameters* params) const {
--    FAISS_THROW_IF_NOT_MSG(
--            !params, "search params not supported for this index");
-+        const SearchParameters* params_in) const {
-     FAISS_THROW_IF_NOT(k > 0);
-+    const IVFSearchParameters* params = nullptr;
-+    if (params_in) {
-+        params = dynamic_cast<const IVFSearchParameters*>(params_in);
-+        FAISS_THROW_IF_NOT_MSG(params, "IndexIVF params have incorrect type");
-+    }
-+    const size_t nprobe_2 = std::min(nlist, params ? params->nprobe : this->nprobe);
-     FAISS_THROW_IF_NOT(nprobe > 0);
- 
--    const size_t nprobe_2 = std::min(nlist, this->nprobe);
-     std::unique_ptr<idx_t[]> idx(new idx_t[n * nprobe_2]);
-     std::unique_ptr<int32_t[]> coarse_dis(new int32_t[n * nprobe_2]);
- 
-     double t0 = getmillisecs();
--    quantizer->search(n, x, nprobe_2, coarse_dis.get(), idx.get());
-+    quantizer->search(
-+            n,
-+            x,
-+            nprobe_2,
-+            coarse_dis.get(),
-+            idx.get(),
-+            params ? params->quantizer_params : nullptr);
-     indexIVF_stats.quantization_time += getmillisecs() - t0;
- 
-     t0 = getmillisecs();
-     invlists->prefetch_lists(idx.get(), n * nprobe_2);
- 
-     search_preassigned(
--            n, x, k, idx.get(), coarse_dis.get(), distances, labels, false);
-+            n,
-+            x,
-+            k,
-+            idx.get(),
-+            coarse_dis.get(),
-+            distances, labels,
-+            false,
-+            params);
-     indexIVF_stats.search_time += getmillisecs() - t0;
- }
- 
+     hnsw_stats.combine({n1, n2, ndis, nhops});
 diff --git a/tests/test_id_grouper.cpp b/tests/test_id_grouper.cpp
-index 6601795b8..e6e14f59e 100644
+index 6601795b..e6e14f59 100644
 --- a/tests/test_id_grouper.cpp
 +++ b/tests/test_id_grouper.cpp
 @@ -14,6 +14,7 @@
@@ -288,5 +241,5 @@ index 6601795b8..e6e14f59e 100644
 +}
 +
 -- 
-2.39.5 (Apple Git-154)
+2.43.0
 

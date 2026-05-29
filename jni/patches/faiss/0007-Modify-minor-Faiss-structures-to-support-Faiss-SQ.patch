@@ -1,7 +1,7 @@
-From ad39469117ff1f45525f8fa78b457f088a097b6b Mon Sep 17 00:00:00 2001
+From 42948c7b71d819ff706de1c67f1400523bf8aa61 Mon Sep 17 00:00:00 2001
 From: Dooyong Kim <kdooyong@amazon.com>
 Date: Mon, 9 Mar 2026 13:33:02 -0700
-Subject: [PATCH] Modify minor Faiss structures to support Faiss BBQ.
+Subject: [PATCH 07/10] Modify minor Faiss structures to support Faiss BBQ.
 
 Signed-off-by: Dooyong Kim <kdooyong@amazon.com>
 ---
@@ -11,7 +11,7 @@ Signed-off-by: Dooyong Kim <kdooyong@amazon.com>
  3 files changed, 5 insertions(+), 2 deletions(-)
 
 diff --git a/faiss/IndexBinaryHNSW.h b/faiss/IndexBinaryHNSW.h
-index 8b90ef0bb..a72f06bc6 100644
+index a43bb398..5950ad49 100644
 --- a/faiss/IndexBinaryHNSW.h
 +++ b/faiss/IndexBinaryHNSW.h
 @@ -46,7 +46,7 @@ struct IndexBinaryHNSW : IndexBinary {
@@ -22,9 +22,9 @@ index 8b90ef0bb..a72f06bc6 100644
 +    virtual DistanceComputer* get_distance_computer() const;
  
      void add(idx_t n, const uint8_t* x) override;
-     void add(idx_t n, const void* x, NumericType numeric_type) override;
+ 
 diff --git a/faiss/impl/HNSW.cpp b/faiss/impl/HNSW.cpp
-index 6fc392dd9..d30e3cf4e 100644
+index bd50eec1..da487873 100644
 --- a/faiss/impl/HNSW.cpp
 +++ b/faiss/impl/HNSW.cpp
 @@ -53,7 +53,7 @@ void HNSW::neighbor_range(idx_t no, int layer_no, size_t* begin, size_t* end)
@@ -37,12 +37,12 @@ index 6fc392dd9..d30e3cf4e 100644
      offsets.push_back(0);
  }
 diff --git a/faiss/impl/HNSW.h b/faiss/impl/HNSW.h
-index 5a3b7f93f..f6f3c1333 100644
+index dbae9048..451c7008 100644
 --- a/faiss/impl/HNSW.h
 +++ b/faiss/impl/HNSW.h
-@@ -146,6 +146,9 @@ struct HNSW {
-     /// use bounded queue during exploration
-     bool search_bounded_queue = true;
+@@ -134,6 +134,9 @@ struct HNSW {
+     // See impl/VisitedTable.h.
+     std::optional<bool> use_visited_hashset;
  
 +    /// Size of the maximum neighbors. Note that the bottom graph can have 2 * m neighbors.
 +    int m;
@@ -51,5 +51,5 @@ index 5a3b7f93f..f6f3c1333 100644
  
      /// initialize the assign_probas and cum_nneighbor_per_level to
 -- 
-2.50.1 (Apple Git-155)
+2.43.0
 

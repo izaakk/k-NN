@@ -1,32 +1,32 @@
-From 73665f7b1406c93eec2e1cc257bfde50dc913c09 Mon Sep 17 00:00:00 2001
+From c469c7cbda91da9af12776d98d8f25205de4d8eb Mon Sep 17 00:00:00 2001
 From: Navneet Verma <vermanavneet003@gmail.com>
 Date: Sat, 21 Mar 2026 21:57:27 -0700
-Subject: [PATCH 7/7] Fixing radial search for IndexHNSWCagra (#1)
+Subject: [PATCH 09/10] Fixing radial search for IndexHNSWCagra (#1)
 
 Signed-off-by: Navneet Verma <navneev@amazon.com>
 ---
  faiss/IndexHNSW.cpp                    |  71 +++++++++++++-
- faiss/IndexHNSW.h                      |  14 ++-
- faiss/impl/HNSW.cpp                    |  14 ++-
- faiss/impl/HNSW.h                      |   6 ++
+ faiss/IndexHNSW.h                      |  13 +++
+ faiss/impl/HNSW.cpp                    |  15 ++-
+ faiss/impl/HNSW.h                      |   8 ++
  tests/CMakeLists.txt                   |   1 +
  tests/test_hnsw_cagra_range_search.cpp | 127 +++++++++++++++++++++++++
- 6 files changed, 227 insertions(+), 6 deletions(-)
+ 6 files changed, 230 insertions(+), 5 deletions(-)
  create mode 100644 tests/test_hnsw_cagra_range_search.cpp
 
 diff --git a/faiss/IndexHNSW.cpp b/faiss/IndexHNSW.cpp
-index 5cf1b0cdb..85f3a811a 100644
+index 0b1bb0e5..a685ae7a 100644
 --- a/faiss/IndexHNSW.cpp
 +++ b/faiss/IndexHNSW.cpp
-@@ -29,6 +29,7 @@
- #include <faiss/impl/ResultHandler.h>
+@@ -30,6 +30,7 @@
+ #include <faiss/impl/VisitedTable.h>
  #include <faiss/utils/random.h>
  #include <faiss/utils/sorting.h>
 +#include <sys/stat.h>
  
  namespace faiss {
  
-@@ -240,11 +241,12 @@ void IndexHNSW::train(idx_t n, const void* x, NumericType numeric_type) {
+@@ -238,11 +239,12 @@ void IndexHNSW::train(idx_t n, const float* x) {
  namespace {
  
  template <class BlockResultHandler>
@@ -40,23 +40,23 @@ index 5cf1b0cdb..85f3a811a 100644
          const SearchParameters* params) {
      FAISS_THROW_IF_NOT_MSG(
              index->storage,
-@@ -279,8 +281,14 @@ void hnsw_search(
+@@ -277,8 +279,14 @@ void hnsw_search(
              for (idx_t i = i0; i < i1; i++) {
                  res.begin(i);
                  dis->set_query(x + i * index->d);
 +                HNSWStats stats;
 +                if (entryPoints != nullptr) {
 +                    // It is assumed that entryPoints array has the same layout as the data, i.e. entryPoints[i] corresponds to the i-th vector being searched.
-+                    stats = hnsw.search_with_entry_point(*dis, res, vt, params, entryPoints[i]);
++                    stats = hnsw.search_with_entry_point(*dis, index, res, vt, params, entryPoints[i]);
 +                } else {
-+                    stats = hnsw.search_with_entry_point(*dis, res, vt, params);
++                    stats = hnsw.search(*dis, index, res, vt, params);
 +                }
  
--                HNSWStats stats = hnsw.search(*dis, res, vt, params);
+-                HNSWStats stats = hnsw.search(*dis, index, res, vt, params);
                  n1 += stats.n1;
                  n2 += stats.n2;
                  ndis += stats.ndis;
-@@ -294,6 +302,16 @@ void hnsw_search(
+@@ -292,6 +300,16 @@ void hnsw_search(
      hnsw_stats.combine({n1, n2, ndis, nhops});
  }
  
@@ -73,7 +73,7 @@ index 5cf1b0cdb..85f3a811a 100644
  template <class BlockResultHandler>
  void hnsw_search_level_0(
          const IndexHNSW* index,
-@@ -397,10 +415,18 @@ void IndexHNSW::range_search(
+@@ -384,10 +402,18 @@ void IndexHNSW::range_search(
          float radius,
          RangeSearchResult* result,
          const SearchParameters* params) const {
@@ -93,7 +93,7 @@ index 5cf1b0cdb..85f3a811a 100644
  
      if (is_similarity_metric(this->metric_type)) {
          // we need to revert the negated distances
-@@ -1123,4 +1149,43 @@ void IndexHNSWCagra::set_numeric_type(faiss::NumericType numeric_type) {
+@@ -1152,4 +1178,43 @@ void IndexHNSWCagra::set_numeric_type(faiss::NumericType numeric_type) {
      numeric_type_ = numeric_type;
  }
  
@@ -138,14 +138,12 @@ index 5cf1b0cdb..85f3a811a 100644
 +
  } // namespace faiss
 diff --git a/faiss/IndexHNSW.h b/faiss/IndexHNSW.h
-index df621af93..054da0d91 100644
+index a43828d4..f8f26a4e 100644
 --- a/faiss/IndexHNSW.h
 +++ b/faiss/IndexHNSW.h
-@@ -122,8 +122,13 @@ struct IndexHNSW : Index {
-     void link_singletons();
+@@ -125,6 +125,12 @@ struct IndexHNSW : Index {
+     virtual void permute_entries(const idx_t* perm);
  
-     void permute_entries(const idx_t* perm);
--
      DistanceComputer* get_distance_computer() const override;
 +
 +    void range_search_with_entry_point(idx_t n,
@@ -156,7 +154,7 @@ index df621af93..054da0d91 100644
  };
  
  /** Flat index topped with with a HNSW structure to access elements
-@@ -232,6 +237,13 @@ struct IndexHNSWCagra : IndexHNSW {
+@@ -262,6 +268,13 @@ struct IndexHNSWCagra : IndexHNSW {
      faiss::NumericType get_numeric_type() const;
      void set_numeric_type(faiss::NumericType numeric_type);
      NumericType numeric_type_;
@@ -171,19 +169,20 @@ index df621af93..054da0d91 100644
  
  } // namespace faiss
 diff --git a/faiss/impl/HNSW.cpp b/faiss/impl/HNSW.cpp
-index 6fc392dd9..ae366e885 100644
+index da487873..94f169c5 100644
 --- a/faiss/impl/HNSW.cpp
 +++ b/faiss/impl/HNSW.cpp
-@@ -945,10 +945,20 @@ HNSWStats HNSW::search(
-         ResultHandler<C>& res,
+@@ -1223,10 +1223,21 @@ HNSWStats HNSW::search(
+         ResultHandler& res,
          VisitedTable& vt,
          const SearchParameters* params) const {
-+    return search_with_entry_point(qdis, res, vt, params, -1);
++    return search_with_entry_point(qdis, index, res, vt, params, -1);
 +}
 +
 +HNSWStats HNSW::search_with_entry_point(
 +        DistanceComputer& qdis,
-+        ResultHandler<C>& res,
++        const IndexHNSW* index,
++        ResultHandler& res,
 +        VisitedTable& vt,
 +        const SearchParameters* params,
 +        storage_idx_t passed_entry_point) const {
@@ -196,7 +195,7 @@ index 6fc392dd9..ae366e885 100644
      int k = extract_k_from_ResultHandler(res);
  
      bool bounded_queue = this->search_bounded_queue;
-@@ -962,7 +972,7 @@ HNSWStats HNSW::search(
+@@ -1240,7 +1251,7 @@ HNSWStats HNSW::search(
      }
  
      //  greedy search on upper levels
@@ -206,37 +205,39 @@ index 6fc392dd9..ae366e885 100644
  
      for (int level = max_level; level >= 1; level--) {
 diff --git a/faiss/impl/HNSW.h b/faiss/impl/HNSW.h
-index 5a3b7f93f..1631ca49b 100644
+index 451c7008..3202cfc6 100644
 --- a/faiss/impl/HNSW.h
 +++ b/faiss/impl/HNSW.h
-@@ -203,6 +203,12 @@ struct HNSW {
+@@ -200,6 +200,14 @@ struct HNSW {
              VisitedTable& vt,
              const SearchParameters* params = nullptr) const;
  
 +    HNSWStats search_with_entry_point(
 +            DistanceComputer& qdis,
-+            ResultHandler<C>& res,
++            const IndexHNSW* index,
++            ResultHandler& res,
 +            VisitedTable& vt,
-+            const SearchParameters* params = nullptr, storage_idx_t passed_entry_point = -1) const;
++            const SearchParameters* params = nullptr,
++            storage_idx_t passed_entry_point = -1) const;
 +
      /// search only in level 0 from a given vertex
      void search_level_0(
              DistanceComputer& qdis,
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index a7514e517..dc149bb78 100644
+index 33f61eb6..676885ac 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -41,6 +41,7 @@ set(FAISS_TEST_SRC
-   test_mmap.cpp
-   test_zerocopy.cpp
+@@ -50,6 +50,7 @@ set(FAISS_TEST_SRC
+   test_simd_levels.cpp
+   test_fast_scan_distance_to_code.cpp
    test_ivfpq_share_table.cpp
 +  test_hnsw_cagra_range_search.cpp
  )
  
- add_executable(faiss_test ${FAISS_TEST_SRC})
+ if(FAISS_ENABLE_SVS)
 diff --git a/tests/test_hnsw_cagra_range_search.cpp b/tests/test_hnsw_cagra_range_search.cpp
 new file mode 100644
-index 000000000..bcf7363dc
+index 00000000..bcf7363d
 --- /dev/null
 +++ b/tests/test_hnsw_cagra_range_search.cpp
 @@ -0,0 +1,127 @@
@@ -369,5 +370,5 @@ index 000000000..bcf7363dc
 +}
 \ No newline at end of file
 -- 
-2.47.0
+2.43.0
 

@@ -106,6 +106,13 @@ set(BUILD_TESTING OFF)          # Avoid building faiss tests
 set(FAISS_ENABLE_GPU OFF)
 set(FAISS_ENABLE_PYTHON OFF)
 
+# SVS (Intel(R) Scalable Vector Search) is an opt-in Faiss feature. When enabled,
+# Faiss builds the SVS integration and libsvs_runtime is linked at runtime.
+# Default is OFF to match upstream Faiss and keep the plugin's native build
+# portable across non-Intel platforms. Enable by passing -DFAISS_ENABLE_SVS=ON
+# at CMake time, or via Gradle with -DFAISS_ENABLE_SVS=true.
+option(FAISS_ENABLE_SVS "Enable Intel SVS integration in Faiss" OFF)
+
 # On Windows, define FAISS_MAIN_LIB to export symbols when building the Faiss library
 if(${CMAKE_SYSTEM_NAME} STREQUAL Windows)
     add_compile_definitions(FAISS_MAIN_LIB)

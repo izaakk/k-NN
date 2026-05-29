@@ -1,21 +1,21 @@
-From 47d4afb37e203cf9232cb73681cf5bba1b64864b Mon Sep 17 00:00:00 2001
+From c2084a415bfaa2ad1f87dfff23817567c4c1c9c9 Mon Sep 17 00:00:00 2001
 From: AnnTian Shao <anntians@amazon.com>
 Date: Fri, 1 Aug 2025 22:02:26 -0700
-Subject: [PATCH] Add multi-vector-support faiss patch to
+Subject: [PATCH 05/10] Add multi-vector-support faiss patch to
  IndexHNSW::search_level_0
 
 Signed-off-by: AnnTian Shao <anntians@amazon.com>
 ---
- faiss/IndexHNSW.cpp       | 117 +++++++++++++++++++++++++---------
+ faiss/IndexHNSW.cpp       | 119 ++++++++++++++++++++++++++---------
  faiss/index_factory.cpp   |   7 ++-
  tests/test_id_grouper.cpp | 128 ++++++++++++++++++++++++++++++++++++++
- 3 files changed, 222 insertions(+), 30 deletions(-)
+ 3 files changed, 222 insertions(+), 32 deletions(-)
 
 diff --git a/faiss/IndexHNSW.cpp b/faiss/IndexHNSW.cpp
-index 0f912b003..5cf1b0cdb 100644
+index a574ba2a..0b1bb0e5 100644
 --- a/faiss/IndexHNSW.cpp
 +++ b/faiss/IndexHNSW.cpp
-@@ -294,6 +294,61 @@ void hnsw_search(
+@@ -292,6 +292,61 @@ void hnsw_search(
      hnsw_stats.combine({n1, n2, ndis, nhops});
  }
  
@@ -47,7 +47,7 @@ index 0f912b003..5cf1b0cdb 100644
 +        std::unique_ptr<DistanceComputer> qdis(
 +                storage_distance_computer(index->storage));
 +        HNSWStats search_stats;
-+        VisitedTable vt(index->ntotal);
++        VisitedTable vt(index->ntotal, index->hnsw.use_visited_hashset);
 +        typename BlockResultHandler::SingleResultHandler res(bres);
 +
 +#pragma omp for
@@ -77,9 +77,9 @@ index 0f912b003..5cf1b0cdb 100644
  } // anonymous namespace
  
  void IndexHNSW::search(
-@@ -446,38 +501,42 @@ void IndexHNSW::search_level_0(
+@@ -443,40 +498,42 @@ void IndexHNSW::search_level_0(
  
-     storage_idx_t ntotal = hnsw.levels.size();
+     storage_idx_t hnsw_ntotal = hnsw.levels.size();
  
 -    using RH = HeapBlockResultHandler<HNSW::C>;
 -    RH bres(n, distances, labels, k);
@@ -89,7 +89,7 @@ index 0f912b003..5cf1b0cdb 100644
 -        std::unique_ptr<DistanceComputer> qdis(
 -                storage_distance_computer(storage));
 -        HNSWStats search_stats;
--        VisitedTable vt(ntotal);
+-        VisitedTable vt(hnsw_ntotal, hnsw.use_visited_hashset);
 -        RH::SingleResultHandler res(bres);
 +    if (params && params->grp) {
 +        using RH = GroupedHeapBlockResultHandler<HNSW::C>;
@@ -108,13 +108,13 @@ index 0f912b003..5cf1b0cdb 100644
 +                nearest_d,
 +                distances,
 +                labels,
-+                nprobe, // n_probes
-+                search_type, // search_type
++                nprobe,
++                search_type,
 +                params,
 +                bres);
 +    } else {
 +        using RH = HeapBlockResultHandler<HNSW::C>;
-+        RH bres(n, distances, labels, k);  
++        RH bres(n, distances, labels, k);
  
 -            hnsw.search_level_0(
 -                    *qdis.get(),
@@ -130,7 +130,9 @@ index 0f912b003..5cf1b0cdb 100644
 -            vt.advance();
 -        }
 -#pragma omp critical
--        { hnsw_stats.combine(search_stats); }
+-        {
+-            hnsw_stats.combine(search_stats);
+-        }
 +        hnsw_search_level_0(
 +                this,
 +                n,
@@ -140,8 +142,8 @@ index 0f912b003..5cf1b0cdb 100644
 +                nearest_d,
 +                distances,
 +                labels,
-+                nprobe, // n_probes
-+                search_type, // search_type
++                nprobe,
++                search_type,
 +                params,
 +                bres);
      }
@@ -150,10 +152,10 @@ index 0f912b003..5cf1b0cdb 100644
  // we need to revert the negated distances
  #pragma omp parallel for
 diff --git a/faiss/index_factory.cpp b/faiss/index_factory.cpp
-index baf7a760f..9b59b7a55 100644
+index 1e66227a..e5f9e8d4 100644
 --- a/faiss/index_factory.cpp
 +++ b/faiss/index_factory.cpp
-@@ -467,6 +467,11 @@ IndexHNSW* parse_IndexHNSW(
+@@ -499,6 +499,11 @@ IndexHNSW* parse_IndexHNSW(
          return re_match(code_string, pattern, sm);
      };
  
@@ -165,7 +167,7 @@ index baf7a760f..9b59b7a55 100644
      if (match("Flat|")) {
          return new IndexHNSWFlat(d, hnsw_M, mt);
      }
-@@ -801,7 +806,7 @@ std::unique_ptr<Index> index_factory_sub(
+@@ -989,7 +994,7 @@ std::unique_ptr<Index> index_factory_sub(
  
      // HNSW variants (it was unclear in the old version that the separator was a
      // "," so we support both "_" and ",")
@@ -175,7 +177,7 @@ index baf7a760f..9b59b7a55 100644
          // We also accept empty code string (synonym of Flat)
          std::string code_string =
 diff --git a/tests/test_id_grouper.cpp b/tests/test_id_grouper.cpp
-index e6e14f59e..7c79ddc79 100644
+index e6e14f59..7c79ddc7 100644
 --- a/tests/test_id_grouper.cpp
 +++ b/tests/test_id_grouper.cpp
 @@ -173,6 +173,65 @@ TEST(IdGrouper, bitmap_with_hnsw) {
@@ -321,5 +323,5 @@ index e6e14f59e..7c79ddc79 100644
      int d = 1;   // dimension
      int nb = 10; // database size
 -- 
-2.39.5 (Apple Git-154)
+2.43.0
 

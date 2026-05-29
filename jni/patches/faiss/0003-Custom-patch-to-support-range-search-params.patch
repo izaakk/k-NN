@@ -1,18 +1,17 @@
-From 38ac6abaa528e5ade42d60155aea7e1ea4e80899 Mon Sep 17 00:00:00 2001
-From: Junqiu Lei <junqiu@amazon.com>
-Date: Fri, 1 Aug 2025 17:20:56 -0700
-Subject: [PATCH] Custom patch to support range search params
+From e561121678175ee6e9c23b21c4f7d7fbad938c51 Mon Sep 17 00:00:00 2001
+From: k-NN Contributor <noreply@opensearch.org>
+Date: Fri, 17 Apr 2026 22:49:07 +0000
+Subject: [PATCH 03/10] patch-0003
 
-Signed-off-by: Junqiu Lei <junqiu@amazon.com>
 ---
  faiss/IndexIDMap.cpp | 28 ++++++++++++++++++++++++----
  1 file changed, 24 insertions(+), 4 deletions(-)
 
 diff --git a/faiss/IndexIDMap.cpp b/faiss/IndexIDMap.cpp
-index 123e8f2ff..8c7a893e3 100644
+index ff109369..9c513a22 100644
 --- a/faiss/IndexIDMap.cpp
 +++ b/faiss/IndexIDMap.cpp
-@@ -256,11 +256,31 @@ void IndexIDMapTemplate<IndexT>::range_search(
+@@ -257,11 +257,31 @@ void IndexIDMapTemplate<IndexT>::range_search(
          RangeSearchResult* result,
          const SearchParameters* params) const {
      if (params) {
@@ -49,4 +48,5 @@ index 123e8f2ff..8c7a893e3 100644
          index->range_search(n, x, radius, result);
      }
 -- 
-2.39.5 (Apple Git-154)
+2.43.0
+
