@@ -20,6 +20,13 @@ extern "C" {
 #endif
 /*
  * Class:     org_opensearch_knn_jni_FaissService
+ * Method:    isLvqLeanvecEnabled
+ * Signature: ()Z
+ */
+JNIEXPORT jboolean JNICALL Java_org_opensearch_knn_jni_FaissService_isLvqLeanvecEnabled(JNIEnv * env, jclass cls);
+
+/*
+ * Class:     org_opensearch_knn_jni_FaissService
  * Method:    initIndex
  * Signature: ([IJILjava/lang/String;Ljava/util/Map;)V
  */

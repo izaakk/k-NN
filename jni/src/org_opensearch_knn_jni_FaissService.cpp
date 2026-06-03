@@ -21,6 +21,9 @@
 #include "faiss/impl/FaissException.h"
 #include "faiss_index_service.h"
 #include "sq/faiss_sq_hnsw.h"
+#ifdef FAISS_ENABLE_SVS
+#include "faiss/svs/IndexSVSVamana.h"
+#endif
 
 static knn_jni::JNIUtil jniUtil;
 static const jint KNN_FAISS_JNI_VERSION = JNI_VERSION_1_1;
@@ -42,6 +45,20 @@ void JNI_OnUnload(JavaVM *vm, void *reserved) {
     vm->GetEnv((void**)&env, KNN_FAISS_JNI_VERSION);
     faiss::InterruptCallback::instance.get()->clear_instance();
     jniUtil.Uninitialize(env);
+}
+
+JNIEXPORT jboolean JNICALL Java_org_opensearch_knn_jni_FaissService_isLvqLeanvecEnabled(JNIEnv * env, jclass cls)
+{
+    try {
+#ifdef FAISS_ENABLE_SVS
+        return faiss::IndexSVSVamana::is_lvq_leanvec_enabled() ? JNI_TRUE : JNI_FALSE;
+#else
+        return JNI_FALSE;
+#endif
+    } catch (...) {
+        jniUtil.CatchCppExceptionAndThrowJava(env);
+    }
+    return JNI_FALSE;
 }
 
 JNIEXPORT jlong JNICALL Java_org_opensearch_knn_jni_FaissService_initIndex(JNIEnv * env, jclass cls,

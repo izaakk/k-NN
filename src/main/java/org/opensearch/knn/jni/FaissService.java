@@ -56,6 +56,12 @@ class FaissService {
     public static native long initIndex(long numDocs, int dim, Map<String, Object> parameters);
 
     /**
+     * Whether this Faiss build supports SVS LVQ/LeanVec compression. Returns {@code false} when SVS is not
+     * compiled in ({@code FAISS_ENABLE_SVS} off) or the platform lacks the required Intel SIMD support.
+     */
+    public static native boolean isLvqLeanvecEnabled();
+
+    /**
      * Initialize an index for the native library. Takes in numDocs to
      * allocate the correct amount of memory.
      *

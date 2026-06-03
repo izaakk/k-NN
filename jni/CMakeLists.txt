@@ -123,6 +123,11 @@ if (${CONFIG_FAISS} STREQUAL ON OR ${CONFIG_ALL} STREQUAL ON OR ${CONFIG_TEST} S
         ${CMAKE_CURRENT_SOURCE_DIR}/external/faiss
     )
     opensearch_set_common_properties(${TARGET_LIB_FAISS})
+    # FAISS_SVS_RUNTIME_VERSION must match the value the Faiss libraries are built with (faiss/CMakeLists.txt
+    # defaults it to "v0" — the SVS runtime *API* version, not the release v0.3.0); headers alias svs::runtime::v0.
+    if(FAISS_ENABLE_SVS)
+        target_compile_definitions(${TARGET_LIB_FAISS} PRIVATE FAISS_ENABLE_SVS FAISS_SVS_RUNTIME_VERSION=v0)
+    endif()
     list(APPEND TARGET_LIBS ${TARGET_LIB_FAISS})
 endif ()
 
