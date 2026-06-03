@@ -29,7 +29,7 @@ import static org.opensearch.knn.common.KNNConstants.PARAMETERS;
  * description in the map and returns the processed map
  */
 @AllArgsConstructor
-class MethodAsMapBuilder {
+public class MethodAsMapBuilder {
     String indexDescription;
     MethodComponent methodComponent;
     Map<String, Object> methodAsMap;
@@ -45,7 +45,7 @@ class MethodAsMapBuilder {
      * @return this builder
      */
     @SuppressWarnings("unchecked")
-    MethodAsMapBuilder addParameter(String parameterName, String prefix, String suffix) {
+    public MethodAsMapBuilder addParameter(String parameterName, String prefix, String suffix) {
         indexDescription += prefix;
 
         // When we add a parameter, what we are doing is taking it from the methods parameter and building it
@@ -88,16 +88,29 @@ class MethodAsMapBuilder {
     }
 
     /**
+     * Drops a trailing {@code ",<token>"} from the index description if present. SVS methods still call
+     * {@link #addParameter} for the default {@code flat} encoder so it is normalized into the method map and
+     * serializes, then use this to strip the {@code ,Flat} suffix that the native factory does not accept.
+     */
+    public MethodAsMapBuilder dropTrailingDescriptionToken(String token) {
+        String suffix = "," + token;
+        if (indexDescription.endsWith(suffix)) {
+            indexDescription = indexDescription.substring(0, indexDescription.length() - suffix.length());
+        }
+        return this;
+    }
+
+    /**
      * Build
      *
      * @return Method as a map
      */
-    KNNLibraryIndexingContext build() {
+    public KNNLibraryIndexingContext build() {
         methodAsMap.put(KNNConstants.INDEX_DESCRIPTION_PARAMETER, indexDescription);
         return KNNLibraryIndexingContextImpl.builder().parameters(methodAsMap).quantizationConfig(quantizationConfig).build();
     }
 
-    static MethodAsMapBuilder builder(
+    public static MethodAsMapBuilder builder(
         String baseDescription,
         MethodComponent methodComponent,
         MethodComponentContext methodComponentContext,

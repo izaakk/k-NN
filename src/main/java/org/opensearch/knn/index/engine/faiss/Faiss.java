@@ -6,6 +6,8 @@
 package org.opensearch.knn.index.engine.faiss;
 
 import com.google.common.collect.ImmutableMap;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.opensearch.common.ValidationException;
 import org.opensearch.knn.common.KNNConstants;
 import org.opensearch.knn.index.SpaceType;
@@ -21,7 +23,11 @@ import org.opensearch.knn.memoryoptsearch.VectorSearcherFactory;
 import org.opensearch.knn.memoryoptsearch.faiss.FaissMemoryOptimizedSearcherFactory;
 import org.opensearch.remoteindexbuild.model.RemoteIndexParameters;
 
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
+import java.util.ServiceConfigurationError;
+import java.util.ServiceLoader;
 import java.util.function.Function;
 
 import static org.opensearch.knn.common.KNNConstants.METHOD_HNSW;
@@ -32,6 +38,8 @@ import static org.opensearch.knn.common.KNNConstants.NAME;
  * Implements NativeLibrary for the faiss native library
  */
 public class Faiss extends NativeLibrary {
+    private static final Logger logger = LogManager.getLogger(Faiss.class);
+
     public static final String FAISS_BINARY_INDEX_DESCRIPTION_PREFIX = "B";
     Map<SpaceType, Function<Float, Float>> distanceTransform;
     Map<SpaceType, Function<Float, Float>> scoreTransform;
@@ -66,8 +74,31 @@ public class Faiss extends NativeLibrary {
         .put(SpaceType.INNER_PRODUCT, distance -> -1 * distance)
         .build();
 
-    // Package private so that the method resolving logic can access the methods
-    final static Map<String, KNNMethod> METHODS = ImmutableMap.of(METHOD_HNSW, new FaissHNSWMethod(), METHOD_IVF, new FaissIVFMethod());
+    // Package private so the method resolving logic can access the methods. Built-in methods are merged with
+    // any contributed at runtime via SandboxFaissMethodProvider/ServiceLoader, so main needs no compile-time
+    // reference to the sandbox engines (e.g. SVS).
+    final static Map<String, KNNMethod> METHODS = buildMethods();
+
+    private static Map<String, KNNMethod> buildMethods() {
+        Map<String, KNNMethod> methods = new HashMap<>();
+        methods.put(METHOD_HNSW, new FaissHNSWMethod());
+        methods.put(METHOD_IVF, new FaissIVFMethod());
+        // Iterate defensively: a throwing/misconfigured sandbox provider must not take down the built-in engines.
+        Iterator<SandboxFaissMethodProvider> providers = ServiceLoader.load(SandboxFaissMethodProvider.class, Faiss.class.getClassLoader())
+            .iterator();
+        while (true) {
+            try {
+                if (providers.hasNext() == false) {
+                    break;
+                }
+                SandboxFaissMethodProvider provider = providers.next();
+                methods.putAll(provider.methods());
+            } catch (ServiceConfigurationError | RuntimeException e) {
+                logger.warn("Skipping misconfigured SandboxFaissMethodProvider while building Faiss methods", e);
+            }
+        }
+        return ImmutableMap.copyOf(methods);
+    }
 
     public final static Faiss INSTANCE = new Faiss(
         METHODS,
