@@ -357,6 +357,21 @@ opensearchplugin {
     noticeFile = rootProject.file('NOTICE.txt')
 }
 
+// Bundle the experimental :sandbox jar into the plugin zip as a RUNTIME-ONLY artifact.
+// The root project deliberately does NOT declare a compile/api dependency on :sandbox
+// (so :sandbox classes never leak onto the root compileClasspath and release-artifact
+// isolation is preserved). Instead we copy the sandbox jar output directly into the
+// bundlePlugin zip so the SVS engine classes + their META-INF/services provider file are
+// present on the runtime classpath and discoverable via ServiceLoader.
+// Ensure the :sandbox project is evaluated before we reference its tasks.
+evaluationDependsOn(':sandbox')
+tasks.named("bundlePlugin").configure {
+    dependsOn ':sandbox:jar'
+    // Reference the sandbox jar lazily via its archive file provider so it lands at the
+    // root of the plugin zip alongside the other runtime jars.
+    from(project(':sandbox').tasks.named('jar').flatMap { it.archiveFile })
+}
+
 tasks.named("integTest").configure {
     it.dependsOn(project.tasks.named("bundlePlugin"))
 }
@@ -537,6 +552,13 @@ tasks.register('cmakeJniLib', Exec) {
     args.add("-DCOMMIT_LIB_PATCHES=${commit_lib_patches}")
     args.add("-DAPPLY_LIB_PATCHES=${apply_lib_patches}")
     args.add("-DCMAKE_POLICY_VERSION_MINIMUM=3.5")
+    // Opt-in Intel SVS build: -Pfaiss.enable.svs=true [-Psvs.runtime.dir=/path/to/cmake/svs_runtime]
+    if (project.hasProperty('faiss.enable.svs') && project.property('faiss.enable.svs') == 'true') {
+        args.add("-DFAISS_ENABLE_SVS=ON")
+        if (project.hasProperty('svs.runtime.dir')) {
+            args.add("-Dsvs_runtime_DIR=${project.property('svs.runtime.dir')}")
+        }
+    }
     def javaHome = Jvm.current().getJavaHome()
     logger.lifecycle("Java home directory used by gradle: $javaHome")
     if (Os.isFamily(Os.FAMILY_WINDOWS)) {
