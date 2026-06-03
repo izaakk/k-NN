@@ -285,6 +285,24 @@ public class FaissMethodResolverTests extends KNNTestCase {
 
     }
 
+    public void testResolveMethod_whenSvsVamanaOnDisk_thenThrow() {
+        MethodComponentContext methodComponentContext = new MethodComponentContext("svs_vamana", Map.of());
+        final KNNMethodContext knnMethodContext = new KNNMethodContext(KNNEngine.FAISS, SpaceType.L2, methodComponentContext);
+
+        KNNMethodConfigContext knnMethodConfigContext = KNNMethodConfigContext.builder()
+            .vectorDataType(VectorDataType.FLOAT)
+            .dimension(128)
+            .versionCreated(Version.CURRENT)
+            .mode(Mode.ON_DISK)
+            .build();
+
+        ValidationException validationException = expectThrows(
+            ValidationException.class,
+            () -> TEST_RESOLVER.resolveMethod(knnMethodContext, knnMethodConfigContext, false, SpaceType.L2)
+        );
+        assertTrue(validationException.getMessage().contains("mode=on_disk is not supported with svs_vamana"));
+    }
+
     public void testResolveMethod_whenExplicitCompression32x_thenResolvesToSQOneBit() {
         ResolvedMethodContext resolvedMethodContext = TEST_RESOLVER.resolveMethod(
             null,
