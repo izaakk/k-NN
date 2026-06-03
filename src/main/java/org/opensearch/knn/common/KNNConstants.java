@@ -33,6 +33,9 @@ public class KNNConstants {
     public static final String PROPERTIES = "properties";
     public static final String METHOD_PARAMETER = "method_parameters";
     public static final String METHOD_PARAMETER_EF_SEARCH = "ef_search";
+    // SVS Vamana query-time search parameters (consumed by the sandbox SVS tenant)
+    public static final String METHOD_PARAMETER_SEARCH_WINDOW_SIZE = "search_window_size";
+    public static final String METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY = "search_buffer_capacity";
     public static final String METHOD_PARAMETER_EF_CONSTRUCTION = "ef_construction";
     public static final String METHOD_PARAMETER_M = "m";
     public static final String METHOD_IVF = "ivf";

@@ -5,6 +5,8 @@
 
 package org.opensearch.knn.index.engine.faiss;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.opensearch.Version;
 import org.opensearch.common.ValidationException;
 import org.opensearch.knn.index.SpaceType;
@@ -22,7 +24,11 @@ import org.opensearch.knn.index.mapper.CompressionLevel;
 import org.opensearch.knn.index.mapper.Mode;
 
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Locale;
 import java.util.Map;
+import java.util.ServiceConfigurationError;
+import java.util.ServiceLoader;
 import java.util.Set;
 
 import static org.opensearch.knn.common.KNNConstants.ENCODER_FLAT;
@@ -39,6 +45,8 @@ import static org.opensearch.knn.index.engine.faiss.FaissIVFMethod.IVF_COMPONENT
 
 public class FaissMethodResolver extends AbstractMethodResolver {
 
+    private static final Logger logger = LogManager.getLogger(FaissMethodResolver.class);
+
     private static final Set<CompressionLevel> SUPPORTED_COMPRESSION_LEVELS = Set.of(
         CompressionLevel.x1,
         CompressionLevel.x2,
@@ -47,6 +55,48 @@ public class FaissMethodResolver extends AbstractMethodResolver {
         CompressionLevel.x32
     );
 
+    // svs_vamana additionally supports x4 (via lvq 4x4); the QFrame-based HNSW/IVF do not, so x4 stays out
+    // of the global set above.
+    private static final Set<CompressionLevel> SVS_SUPPORTED_COMPRESSION_LEVELS = Set.of(
+        CompressionLevel.x1,
+        CompressionLevel.x2,
+        CompressionLevel.x4,
+        CompressionLevel.x8
+    );
+
+    // SVS marker names matched as literals: the sandbox module owns the SVS classes, so main cannot
+    // reference the sandbox SVSConstants directly.
+    private static final String METHOD_SVS_VAMANA = "svs_vamana";
+    private static final String SVS_ENCODER_LVQ = "lvq";
+    private static final String SVS_LVQ_PRIMARY_BITS = "primary_bits";
+    private static final String SVS_LVQ_RESIDUAL_BITS = "residual_bits";
+
+    // Method registries contributed at runtime via SandboxFaissMethodProvider/ServiceLoader, so main needs no
+    // compile-time reference to any FaissSVS* class.
+    private static final Map<String, MethodComponent> SANDBOX_METHOD_COMPONENTS = new HashMap<>();
+    private static final Map<String, Map<String, Encoder>> SANDBOX_ENCODER_MAPS = new HashMap<>();
+
+    static {
+        // Iterate defensively: a throwing/misconfigured sandbox provider must not take down engine init
+        // (which would also disable the built-in HNSW/IVF methods).
+        Iterator<SandboxFaissMethodProvider> providers = ServiceLoader.load(
+            SandboxFaissMethodProvider.class,
+            FaissMethodResolver.class.getClassLoader()
+        ).iterator();
+        while (true) {
+            try {
+                if (providers.hasNext() == false) {
+                    break;
+                }
+                SandboxFaissMethodProvider provider = providers.next();
+                SANDBOX_METHOD_COMPONENTS.putAll(provider.methodComponents());
+                SANDBOX_ENCODER_MAPS.putAll(provider.encoderMaps());
+            } catch (ServiceConfigurationError | RuntimeException e) {
+                logger.warn("Skipping misconfigured SandboxFaissMethodProvider during FaissMethodResolver init", e);
+            }
+        }
+    }
+
     @Override
     public ResolvedMethodContext resolveMethod(
         KNNMethodContext knnMethodContext,
@@ -54,8 +104,22 @@ public class FaissMethodResolver extends AbstractMethodResolver {
         boolean shouldRequireTraining,
         final SpaceType spaceType
     ) {
+        boolean isSvsVamana = knnMethodContext != null
+            && knnMethodContext.getMethodComponentContext() != null
+            && METHOD_SVS_VAMANA.equals(knnMethodContext.getMethodComponentContext().getName());
+
         // Initial validation to ensure that there are no contradictions in provided parameters
-        validateConfig(knnMethodConfigContext);
+        validateConfig(knnMethodConfigContext, isSvsVamana);
+
+        // svs_vamana is an in-memory-only execution path; reject mode=on_disk explicitly.
+        if (isSvsVamana && knnMethodConfigContext.getMode() == Mode.ON_DISK) {
+            ValidationException validationException = new ValidationException();
+            validationException.addValidationError(
+                "mode=on_disk is not supported with svs_vamana; SVS is an in-memory execution path. "
+                    + "Use mode=in_memory or a different method."
+            );
+            throw validationException;
+        }
 
         KNNMethodContext resolvedKNNMethodContext = initResolvedKNNMethodContext(
             knnMethodContext,
@@ -63,10 +127,20 @@ public class FaissMethodResolver extends AbstractMethodResolver {
             spaceType,
             shouldRequireTraining ? METHOD_IVF : METHOD_HNSW
         );
-        MethodComponent method = METHOD_HNSW.equals(resolvedKNNMethodContext.getMethodComponentContext().getName()) == false
-            ? IVF_COMPONENT
-            : HNSW_COMPONENT;
-        Map<String, Encoder> encoderMap = method == HNSW_COMPONENT ? FaissHNSWMethod.SUPPORTED_ENCODERS : FaissIVFMethod.SUPPORTED_ENCODERS;
+        // Built-ins are handled directly; other methods come from the sandbox registry, else IVF default.
+        String methodName = resolvedKNNMethodContext.getMethodComponentContext().getName();
+        MethodComponent method;
+        Map<String, Encoder> encoderMap;
+        if (METHOD_HNSW.equals(methodName)) {
+            method = HNSW_COMPONENT;
+            encoderMap = FaissHNSWMethod.SUPPORTED_ENCODERS;
+        } else if (SANDBOX_METHOD_COMPONENTS.containsKey(methodName)) {
+            method = SANDBOX_METHOD_COMPONENTS.get(methodName);
+            encoderMap = SANDBOX_ENCODER_MAPS.getOrDefault(methodName, Map.of());
+        } else {
+            method = IVF_COMPONENT;
+            encoderMap = FaissIVFMethod.SUPPORTED_ENCODERS;
+        }
 
         // Fill in parameters for the encoder and then the method.
         resolveEncoder(resolvedKNNMethodContext, knnMethodConfigContext, encoderMap);
@@ -103,6 +177,13 @@ public class FaissMethodResolver extends AbstractMethodResolver {
 
         CompressionLevel resolvedCompressionLevel = getDefaultCompressionLevel(knnMethodConfigContext);
         if (resolvedCompressionLevel == CompressionLevel.x1) {
+            return;
+        }
+
+        // svs_vamana uses its own sq/lvq encoders, not QFrame; return before the QFrame chain, which would
+        // otherwise NPE on the absent QFrame entry in the SVS encoder map.
+        if (METHOD_SVS_VAMANA.equals(resolvedKNNMethodContext.getMethodComponentContext().getName())) {
+            resolveSVSEncoder(resolvedKNNMethodContext, knnMethodConfigContext, encoderMap, resolvedCompressionLevel);
             return;
         }
 
@@ -165,12 +246,66 @@ public class FaissMethodResolver extends AbstractMethodResolver {
         resolvedKNNMethodContext.getMethodComponentContext().getParameters().put(METHOD_ENCODER_PARAMETER, encoderComponentContext);
     }
 
+    /**
+     * Resolves the SVS encoder for a user-supplied {@code compression_level} when no explicit encoder was
+     * given: {@code 2x} -> {@code sq}(fp16), {@code 4x} -> {@code lvq}(4,4), {@code 8x} -> {@code lvq}(4,0).
+     * Other levels require an explicit {@code encoder} block.
+     */
+    private void resolveSVSEncoder(
+        KNNMethodContext resolvedKNNMethodContext,
+        KNNMethodConfigContext knnMethodConfigContext,
+        Map<String, Encoder> encoderMap,
+        CompressionLevel resolvedCompressionLevel
+    ) {
+        MethodComponentContext encoderComponentContext;
+        Encoder encoder;
+        if (CompressionLevel.x2 == resolvedCompressionLevel) {
+            encoderComponentContext = new MethodComponentContext(ENCODER_SQ, new HashMap<>());
+            encoderComponentContext.getParameters().put(FAISS_SQ_TYPE, FAISS_SQ_ENCODER_FP16);
+            encoder = encoderMap.get(ENCODER_SQ);
+        } else if (CompressionLevel.x4 == resolvedCompressionLevel) {
+            encoderComponentContext = new MethodComponentContext(SVS_ENCODER_LVQ, new HashMap<>());
+            encoderComponentContext.getParameters().put(SVS_LVQ_PRIMARY_BITS, 4);
+            encoderComponentContext.getParameters().put(SVS_LVQ_RESIDUAL_BITS, 4);
+            encoder = encoderMap.get(SVS_ENCODER_LVQ);
+        } else if (CompressionLevel.x8 == resolvedCompressionLevel) {
+            encoderComponentContext = new MethodComponentContext(SVS_ENCODER_LVQ, new HashMap<>());
+            encoderComponentContext.getParameters().put(SVS_LVQ_PRIMARY_BITS, 4);
+            encoderComponentContext.getParameters().put(SVS_LVQ_RESIDUAL_BITS, 0);
+            encoder = encoderMap.get(SVS_ENCODER_LVQ);
+        } else {
+            ValidationException validationException = new ValidationException();
+            validationException.addValidationError(
+                String.format(
+                    Locale.ROOT,
+                    "Compression level [%s] is not supported for svs_vamana via compression_level. "
+                        + "Supported levels are 2x, 4x, 8x; for other levels specify an explicit encoder.",
+                    resolvedCompressionLevel.getName()
+                )
+            );
+            throw validationException;
+        }
+
+        if (encoder == null) {
+            // SVS encoder set not registered (sandbox module absent); nothing to resolve.
+            return;
+        }
+
+        Map<String, Object> resolvedParams = MethodComponent.getParameterMapWithDefaultsAdded(
+            encoderComponentContext,
+            encoder.getMethodComponent(),
+            knnMethodConfigContext
+        );
+        encoderComponentContext.getParameters().putAll(resolvedParams);
+        resolvedKNNMethodContext.getMethodComponentContext().getParameters().put(METHOD_ENCODER_PARAMETER, encoderComponentContext);
+    }
+
     // Method validates for explicit contradictions in the config
-    private void validateConfig(KNNMethodConfigContext knnMethodConfigContext) {
+    private void validateConfig(KNNMethodConfigContext knnMethodConfigContext, boolean isSvsVamana) {
         CompressionLevel compressionLevel = knnMethodConfigContext.getCompressionLevel();
         ValidationException validationException = validateCompressionSupported(
             compressionLevel,
-            SUPPORTED_COMPRESSION_LEVELS,
+            isSvsVamana ? SVS_SUPPORTED_COMPRESSION_LEVELS : SUPPORTED_COMPRESSION_LEVELS,
             KNNEngine.FAISS,
             null
         );
