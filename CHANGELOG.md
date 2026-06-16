@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 * Support derived source for knn with other fields [#3260](https://github.com/opensearch-project/k-NN/pull/3260)
 * Added support for 1 bit SQ with remote build [#3270](https://github.com/opensearch-project/k-NN/pull/3270)
 * Add rescoring phase after radial search on quantized index [#3347](https://github.com/opensearch-project/k-NN/pull/3347)
+* Add Intel SVS Vamana method (`svs_vamana`) as the first experimental `:sandbox` tenant, with `flat`/`sq`/`lvq` encoders, `cosinesimil`, and `alpha` (opt-in via `-Pknn.sandbox.enabled`) [#XXXX](https://github.com/opensearch-project/k-NN/pull/XXXX)
 
 ### Maintenance
 * Update Gradle wrapper to 9.4.1 and Jacoco to 0.8.14 to match core OpenSearch [#3308](https://github.com/opensearch-project/k-NN/pull/3308)
