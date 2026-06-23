@@ -9,5 +9,9 @@ include ":qa"
 include ":qa:rolling-upgrade"
 include ":qa:restart-upgrade"
 include ":remote-index-build-client"
-include ":sandbox"
+
+// Opt-in: excluded from default and release builds.
+if (startParameter.projectProperties['knn.sandbox.enabled'] == 'true') {
+    include ":sandbox"
+}
 

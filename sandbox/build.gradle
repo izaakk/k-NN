@@ -31,7 +31,10 @@ compileTestJava {
 
 dependencies {
     compileOnly group: 'org.opensearch', name: 'opensearch', version: "${opensearch_version}"
+    // Compile against k-NN's own types, not just the published OpenSearch APIs.
+    compileOnly project(':')
     testImplementation "org.opensearch.test:framework:${opensearch_version}"
+    testImplementation project(':')
 }
 
 check.dependsOn spotlessCheck
