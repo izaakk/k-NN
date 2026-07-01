@@ -73,6 +73,10 @@ public class IndexUtil {
     private static final Version MINIMAL_TOP_LEVEL_ENGINE_FEATURE = Version.V_3_2_0;
     private static final Version MINIMAL_SUPPORTED_VERSION_FOR_NULL_K = Version.V_3_3_0;
     private static final Version MINIMAL_RESCORE_ENABLED_FEATURE = Version.V_3_7_0;
+    // Generic node-to-node transport of query method_parameters.
+    // TODO: gate on Version.V_3_8_0 once it exists in the OpenSearch core dep (this pinned build only has up to
+    // V_3_7_0); using Version.CURRENT as a stand-in until then.
+    private static final Version MINIMAL_GENERIC_METHOD_PARAMETERS_FEATURE = Version.CURRENT;
     // public so neural search can access it
     public static final Map<String, Version> minimalRequiredVersionMap = initializeMinimalRequiredVersionMap();
     public static final Set<VectorDataType> VECTOR_DATA_TYPES_NOT_SUPPORTING_ENCODERS = Set.of(VectorDataType.BINARY, VectorDataType.BYTE);
@@ -441,6 +445,7 @@ public class IndexUtil {
                 put(EXPAND_NESTED, MINIMAL_EXPAND_NESTED_FEATURE);
                 put(KNNConstants.TOP_LEVEL_ENGINE_FEATURE, MINIMAL_TOP_LEVEL_ENGINE_FEATURE);
                 put(KNNConstants.NULL_K, MINIMAL_SUPPORTED_VERSION_FOR_NULL_K);
+                put(KNNConstants.GENERIC_METHOD_PARAMETERS_FEATURE, MINIMAL_GENERIC_METHOD_PARAMETERS_FEATURE);
             }
         };
 

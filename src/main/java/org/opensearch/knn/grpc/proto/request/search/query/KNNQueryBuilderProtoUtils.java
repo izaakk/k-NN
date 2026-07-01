@@ -137,10 +137,11 @@ public class KNNQueryBuilderProtoUtils {
             String name = entry.getKey();
             Object value = entry.getValue();
 
-            // Find the MethodParameter enum (same as XContent parsing)
             MethodParameter parameter = MethodParameter.enumOf(name);
             if (parameter == null) {
-                throw new IllegalArgumentException("unknown method parameter found [" + name + "]");
+                // Not an enum param; pass through for the engine to validate (mirrors MethodParametersParser).
+                processedMethodParameters.put(name, value);
+                continue;
             }
 
             try {

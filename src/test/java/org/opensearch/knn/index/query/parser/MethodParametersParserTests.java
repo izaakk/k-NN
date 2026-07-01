@@ -27,8 +27,9 @@ import static org.opensearch.knn.index.query.parser.MethodParametersParser.valid
 public class MethodParametersParserTests extends KNNTestCase {
 
     public void testValidateMethodParameters() {
+        // Unknown params are no longer rejected here; the engine validates them later.
         ValidationException validationException = validateMethodParameters(Map.of("dummy", 0));
-        assertEquals("Validation Failed: 1: dummy is not a valid method parameter;", validationException.getMessage());
+        assertNull(validationException);
 
         ValidationException validationException2 = validateMethodParameters(Map.of("ef_search", 0));
         assertTrue(validationException2.getMessage().contains("Validation Failed: 1: ef_search should be greater than 0"));
@@ -69,10 +70,10 @@ public class MethodParametersParserTests extends KNNTestCase {
         XContentParser parser1 = createParser(builder);
         expectThrows(ParsingException.class, () -> MethodParametersParser.fromXContent(parser1));
 
-        // unknown method parameter
+        // Unknown param is passed through unchanged, not rejected.
         builder = XContentFactory.jsonBuilder().startObject().field("unknown", "10").endObject();
         XContentParser parser2 = createParser(builder);
-        expectThrows(ParsingException.class, () -> MethodParametersParser.fromXContent(parser2));
+        assertEquals(Map.of("unknown", "10"), MethodParametersParser.fromXContent(parser2));
 
         // Valid
         builder = XContentFactory.jsonBuilder().startObject().field("ef_search", 10).endObject();
