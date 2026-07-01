@@ -20,6 +20,7 @@ import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.knn.common.KNNConstants;
 import org.opensearch.knn.index.query.request.MethodParameter;
 
 import java.io.IOException;
@@ -30,7 +31,6 @@ import java.util.Map;
 import java.util.function.Function;
 
 import static org.opensearch.knn.index.query.KNNQueryBuilder.METHOD_PARAMS_FIELD;
-import static org.opensearch.knn.index.query.KNNQueryBuilder.NAME;
 
 /**
  * Note: This parser is used by neural plugin as well, breaking changes will require changes in neural as well
@@ -50,9 +50,8 @@ public class MethodParametersParser {
                 if (validationException != null) {
                     errors.add(validationException.getMessage());
                 }
-            } else { // Should never happen if used in the right sequence
-                errors.add(methodParameter.getKey() + " is not a valid method parameter");
             }
+            // Unknown params are validated later by the engine in KNNQueryBuilder#doToQuery, not rejected here.
         }
 
         if (!errors.isEmpty()) {
@@ -70,12 +69,19 @@ public class MethodParametersParser {
         }
 
         final Map<String, Object> methodParameters = new HashMap<>();
-        for (final MethodParameter methodParameter : MethodParameter.values()) {
-            if (minClusterVersionCheck.apply(methodParameter.getName())) {
-                String name = in.readString();
-                Object value = in.readGenericValue();
-                if (value != null) {
-                    methodParameters.put(name, methodParameter.parse(value));
+        if (minClusterVersionCheck.apply(KNNConstants.GENERIC_METHOD_PARAMETERS_FEATURE)) {
+            // Generic path: read the whole map, so engine-contributed params (not in the enum) survive.
+            final Map<String, Object> generic = in.readMap(StreamInput::readString, StreamInput::readGenericValue);
+            methodParameters.putAll(generic);
+        } else {
+            // Legacy path (older nodes): only enum params transported, positionally.
+            for (final MethodParameter methodParameter : MethodParameter.values()) {
+                if (minClusterVersionCheck.apply(methodParameter.getName())) {
+                    String name = in.readString();
+                    Object value = in.readGenericValue();
+                    if (value != null) {
+                        methodParameters.put(name, methodParameter.parse(value));
+                    }
                 }
             }
         }
@@ -90,11 +96,18 @@ public class MethodParametersParser {
             out.writeBoolean(false);
         } else {
             out.writeBoolean(true);
-            // All values are written to deserialize without ambiguity
-            for (final MethodParameter methodParameter : MethodParameter.values()) {
-                if (minClusterVersionCheck.apply(methodParameter.getName())) {
-                    out.writeString(methodParameter.getName());
-                    out.writeGenericValue(methodParameters.get(methodParameter.getName()));
+            if (minClusterVersionCheck.apply(KNNConstants.GENERIC_METHOD_PARAMETERS_FEATURE)) {
+                // Generic path: write the whole map.
+                @SuppressWarnings("unchecked")
+                final Map<String, Object> generic = (Map<String, Object>) methodParameters;
+                out.writeMap(generic, StreamOutput::writeString, StreamOutput::writeGenericValue);
+            } else {
+                // Legacy path (older nodes): write only enum params, positionally.
+                for (final MethodParameter methodParameter : MethodParameter.values()) {
+                    if (minClusterVersionCheck.apply(methodParameter.getName())) {
+                        out.writeString(methodParameter.getName());
+                        out.writeGenericValue(methodParameters.get(methodParameter.getName()));
+                    }
                 }
             }
         }
@@ -119,13 +132,15 @@ public class MethodParametersParser {
             throw new ParsingException(parser.getTokenLocation(), METHOD_PARAMS_FIELD.getPreferredName() + " cannot be empty");
         }
 
-        final Map<String, ?> methodParameters = new HashMap<>();
+        final Map<String, Object> methodParameters = new HashMap<>();
         for (Map.Entry<String, Object> requestParameter : methodParametersJson.entrySet()) {
             final String name = requestParameter.getKey();
             final Object value = requestParameter.getValue();
             final MethodParameter parameter = MethodParameter.enumOf(name);
             if (parameter == null) {
-                throw new ParsingException(parser.getTokenLocation(), "[" + NAME + "] unknown method parameter found [" + name + "]");
+                // Not an enum param; pass through for the engine to validate in KNNQueryBuilder#doToQuery.
+                methodParameters.put(name, value);
+                continue;
             }
 
             try {

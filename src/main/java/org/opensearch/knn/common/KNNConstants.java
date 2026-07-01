@@ -33,9 +33,6 @@ public class KNNConstants {
     public static final String PROPERTIES = "properties";
     public static final String METHOD_PARAMETER = "method_parameters";
     public static final String METHOD_PARAMETER_EF_SEARCH = "ef_search";
-    // Query-time search-window parameter for the experimental sandbox engine's graph method (analogous to
-    // ef_search for HNSW)
-    public static final String METHOD_PARAMETER_SEARCH_WINDOW_SIZE = "search_window_size";
     public static final String METHOD_PARAMETER_EF_CONSTRUCTION = "ef_construction";
     public static final String METHOD_PARAMETER_M = "m";
     public static final String METHOD_IVF = "ivf";
@@ -88,6 +85,8 @@ public class KNNConstants {
     public static final String MINIMAL_MODE_AND_COMPRESSION_FEATURE = "mode_and_compression_feature";
     public static final String TOP_LEVEL_SPACE_TYPE_FEATURE = "top_level_space_type_feature";
     public static final String TOP_LEVEL_ENGINE_FEATURE = "top_level_engine_feature";
+    // Feature key for engine-agnostic node-to-node transport of query method_parameters (see IndexUtil).
+    public static final String GENERIC_METHOD_PARAMETERS_FEATURE = "generic_method_parameters_feature";
 
     public static final String RADIAL_SEARCH_KEY = "radial_search";
     public static final int MAX_RESULTS_RADIAL_RESCORING = 10000;

@@ -297,10 +297,10 @@ public class KNNQueryBuilderProtoUtilsTests extends OpenSearchTestCase {
     }
 
     @Test
-    public void testFromProto_invalidMethodParameter() {
-        // Test with invalid method parameter
-        ObjectMap.Value invalidValue = ObjectMap.Value.newBuilder().setString("invalid_ef_search").build();
-        ObjectMap methodParams = ObjectMap.newBuilder().putFields("invalid_param_name", invalidValue).build();
+    public void testFromProto_unknownMethodParameter_isDeferred() {
+        // Unknown param is passed through, not rejected; the engine validates it later.
+        ObjectMap.Value unknownValue = ObjectMap.Value.newBuilder().setString("some_value").build();
+        ObjectMap methodParams = ObjectMap.newBuilder().putFields("unknown_param_name", unknownValue).build();
 
         KnnQuery knnQuery = KnnQuery.newBuilder()
             .setField("test_field")
@@ -311,7 +311,10 @@ public class KNNQueryBuilderProtoUtilsTests extends OpenSearchTestCase {
             .setMethodParameters(methodParams)
             .build();
 
-        // Should throw IllegalArgumentException for unknown method parameter
-        expectThrows(IllegalArgumentException.class, () -> { KNNQueryBuilderProtoUtils.fromProto(knnQuery, mockRegistry); });
+        QueryBuilder result = KNNQueryBuilderProtoUtils.fromProto(knnQuery, mockRegistry);
+        assertTrue(result instanceof KNNQueryBuilder);
+        Map<String, ?> methodParameters = ((KNNQueryBuilder) result).getMethodParameters();
+        assertNotNull(methodParameters);
+        assertEquals("some_value", methodParameters.get("unknown_param_name"));
     }
 }
