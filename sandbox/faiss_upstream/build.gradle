@@ -1,0 +1,11 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// Everything else — plugins, repositories, the common dependency set, unit-test conventions, JNI-header
+// generation, and REST integTest wiring (auto-created because this module has *IT test sources) — is
+// inherited from the shared sandbox configuration in sandbox/build.gradle. The native build is discovered
+// from jni/sandbox/faiss_upstream/tenant.cmake.
+description = "Experimental faiss_upstream engine for k-NN: latest upstream faiss, exposing index types " +
+    "that are not in the k-NN faiss pin (first: the Panorama family, IndexIVFFlatPanorama)"

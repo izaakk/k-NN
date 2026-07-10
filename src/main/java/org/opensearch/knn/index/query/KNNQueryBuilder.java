@@ -40,6 +40,7 @@ import org.opensearch.knn.index.mapper.KNNMappingConfig;
 import org.opensearch.knn.index.mapper.KNNVectorFieldType;
 import org.opensearch.knn.index.query.parser.KNNQueryBuilderParser;
 import org.opensearch.knn.index.query.parser.RescoreParser;
+import org.opensearch.knn.index.query.request.MethodParameter;
 import org.opensearch.knn.index.query.rescore.RescoreContext;
 import org.opensearch.knn.index.util.IndexUtil;
 import org.opensearch.knn.indices.ModelDao;
@@ -474,6 +475,17 @@ public class KNNQueryBuilder extends AbstractQueryBuilder<KNNQueryBuilder> imple
                         validationException.getMessage()
                     )
                 );
+            }
+        } else if (methodParameters != null && methodParameters.isEmpty() == false) {
+            // No engine method context is resolvable (e.g. a model without serialized method information), so
+            // the engine-aware validation above cannot run. Parse admits non-core names only when a registered
+            // engine declared them, and a model-based index always belongs to a built-in engine (model training
+            // has no registered-engine path) — so any non-core name here is aimed at the wrong engine; reject it
+            // rather than silently ignore it.
+            for (String parameterName : methodParameters.keySet()) {
+                if (MethodParameter.enumOf(parameterName) == null) {
+                    throw new IllegalArgumentException(String.format(Locale.ROOT, "unknown method parameter found [%s]", parameterName));
+                }
             }
         }
 
