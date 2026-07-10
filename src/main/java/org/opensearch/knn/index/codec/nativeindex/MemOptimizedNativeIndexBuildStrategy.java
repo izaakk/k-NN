@@ -7,6 +7,7 @@ package org.opensearch.knn.index.codec.nativeindex;
 
 import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
+import org.opensearch.knn.index.KNNSettings;
 import org.opensearch.knn.index.codec.nativeindex.model.BuildIndexParams;
 import org.opensearch.knn.index.codec.transfer.OffHeapVectorTransfer;
 import org.opensearch.knn.index.engine.KNNEngine;
@@ -67,6 +68,14 @@ final class MemOptimizedNativeIndexBuildStrategy implements NativeIndexBuildStra
                 engine
             )
         );
+
+        // A registered engine that consumes vectors on-heap (a pure-JVM engine) is handed float[][]
+        // batches directly — the off-heap transfer below only exists so a JNI library can read the
+        // vectors, and such an engine could not portably dereference the address anyway.
+        if (engine.getNativeService() != null && engine.getNativeService().prefersJavaVectors()) {
+            buildAndWriteOnHeap(indexInfo, knnVectorValues, engine, indexParameters, indexBuildSetup, indexMemoryAddress);
+            return;
+        }
 
         try (
             final OffHeapVectorTransfer vectorTransfer = getVectorTransfer(
@@ -134,5 +143,78 @@ final class MemOptimizedNativeIndexBuildStrategy implements NativeIndexBuildStra
                 exception
             );
         }
+    }
+
+    /**
+     * Iterative build for an engine that prefers on-heap vectors: the same batching (bounded by the vector
+     * streaming memory limit) and the same init/insert/write lifecycle, with each batch delivered as
+     * {@code float[][]} instead of being copied off-heap first.
+     */
+    private void buildAndWriteOnHeap(
+        final BuildIndexParams indexInfo,
+        final KNNVectorValues<?> knnVectorValues,
+        final KNNEngine engine,
+        final Map<String, Object> indexParameters,
+        final IndexBuildSetup indexBuildSetup,
+        final long indexMemoryAddress
+    ) throws IOException {
+        try {
+            final int batchLimit = (int) Math.min(
+                Math.max(1, KNNSettings.getVectorStreamingMemoryLimit().getBytes() / indexBuildSetup.getBytesPerVector()),
+                indexInfo.getTotalLiveDocs()
+            );
+            final List<Integer> batchDocIds = new ArrayList<>(batchLimit);
+            final List<float[]> batchVectors = new ArrayList<>(batchLimit);
+
+            while (knnVectorValues.docId() != NO_MORE_DOCS) {
+                Object vector = QuantizationIndexUtils.processAndReturnVector(knnVectorValues, indexBuildSetup);
+                if (vector instanceof float[] == false) {
+                    throw new IllegalStateException(
+                        "On-heap vector delivery supports float vectors only, but engine ["
+                            + engine.getName()
+                            + "] produced "
+                            + vector.getClass().getSimpleName()
+                    );
+                }
+                batchVectors.add((float[]) vector);
+                batchDocIds.add(knnVectorValues.docId());
+                if (batchVectors.size() == batchLimit) {
+                    insertOnHeapBatch(batchDocIds, batchVectors, indexParameters, indexMemoryAddress, engine);
+                }
+                knnVectorValues.nextDoc();
+            }
+            if (batchVectors.isEmpty() == false) {
+                insertOnHeapBatch(batchDocIds, batchVectors, indexParameters, indexMemoryAddress, engine);
+            }
+
+            AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
+                JNIService.writeIndex(indexInfo.getIndexOutputWithBuffer(), indexMemoryAddress, engine, indexParameters, false);
+                return null;
+            });
+        } catch (IndexBuildAbortedException indexBuildAbortedException) {
+            throw indexBuildAbortedException;
+        } catch (Exception exception) {
+            throw new RuntimeException(
+                "Failed to build index, field name [" + indexInfo.getField() + "], parameters " + indexInfo,
+                exception
+            );
+        }
+    }
+
+    private void insertOnHeapBatch(
+        final List<Integer> batchDocIds,
+        final List<float[]> batchVectors,
+        final Map<String, Object> indexParameters,
+        final long indexMemoryAddress,
+        final KNNEngine engine
+    ) {
+        final int[] docs = intListToArray(batchDocIds);
+        final float[][] vectors = batchVectors.toArray(new float[0][]);
+        AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
+            JNIService.insertToIndex(docs, vectors, indexParameters, indexMemoryAddress, engine);
+            return null;
+        });
+        batchDocIds.clear();
+        batchVectors.clear();
     }
 }

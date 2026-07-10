@@ -9,6 +9,9 @@ import lombok.SneakyThrows;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
+import org.opensearch.core.common.unit.ByteSizeUnit;
+import org.opensearch.core.common.unit.ByteSizeValue;
+import org.opensearch.knn.index.KNNSettings;
 import org.opensearch.knn.index.VectorDataType;
 import org.opensearch.knn.index.codec.nativeindex.model.BuildIndexParams;
 import org.opensearch.knn.index.codec.transfer.OffHeapVectorTransfer;
@@ -20,6 +23,7 @@ import org.opensearch.knn.index.vectorvalues.KNNVectorValues;
 import org.opensearch.knn.index.vectorvalues.KNNVectorValuesFactory;
 import org.opensearch.knn.index.vectorvalues.TestVectorValues;
 import org.opensearch.knn.jni.JNIService;
+import org.opensearch.knn.jni.NativeEngineService;
 import org.opensearch.knn.quantization.models.quantizationOutput.QuantizationOutput;
 import org.opensearch.knn.quantization.models.quantizationState.QuantizationState;
 import org.opensearch.test.OpenSearchTestCase;
@@ -34,6 +38,78 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 public class MemOptimizedNativeIndexBuildStrategyTests extends OpenSearchTestCase {
+
+    @SneakyThrows
+    public void testBuildAndWrite_withOnHeapVectorDelivery() {
+        // Given an engine whose NativeEngineService prefers on-heap vectors (a pure-JVM engine)
+        NativeEngineService nativeEngineService = mock(NativeEngineService.class);
+        when(nativeEngineService.prefersJavaVectors()).thenReturn(true);
+        KNNEngine engine = mock(KNNEngine.class);
+        when(engine.getNativeService()).thenReturn(nativeEngineService);
+
+        List<float[]> vectorValues = List.of(new float[] { 1, 2 }, new float[] { 2, 3 }, new float[] { 3, 4 });
+        final TestVectorValues.PreDefinedFloatVectorValues randomVectorValues = new TestVectorValues.PreDefinedFloatVectorValues(
+            vectorValues
+        );
+        final KNNVectorValues<byte[]> knnVectorValues = KNNVectorValuesFactory.getVectorValues(VectorDataType.FLOAT, randomVectorValues);
+
+        try (
+            MockedStatic<JNIService> mockedJNIService = Mockito.mockStatic(JNIService.class);
+            MockedStatic<KNNSettings> mockedKNNSettings = Mockito.mockStatic(KNNSettings.class);
+            MockedStatic<OffHeapVectorTransferFactory> mockedOffHeapVectorTransferFactory = Mockito.mockStatic(
+                OffHeapVectorTransferFactory.class
+            )
+        ) {
+            mockedJNIService.when(() -> JNIService.initIndex(3, 2, Map.of("index", "param"), engine)).thenReturn(100L);
+            // 16 bytes / 8 bytes-per-vector -> batches of 2 vectors, mirroring the off-heap test's limit
+            mockedKNNSettings.when(KNNSettings::getVectorStreamingMemoryLimit).thenReturn(new ByteSizeValue(16, ByteSizeUnit.BYTES));
+
+            IndexOutputWithBuffer indexOutputWithBuffer = Mockito.mock(IndexOutputWithBuffer.class);
+            BuildIndexParams buildIndexParams = BuildIndexParams.builder()
+                .indexOutputWithBuffer(indexOutputWithBuffer)
+                .knnEngine(engine)
+                .vectorDataType(VectorDataType.FLOAT)
+                .indexParameters(Map.of("index", "param"))
+                .knnVectorValuesSupplier(() -> knnVectorValues)
+                .totalLiveDocs((int) knnVectorValues.totalLiveDocs())
+                .build();
+
+            // When
+            MemOptimizedNativeIndexBuildStrategy.getInstance().buildAndWriteIndex(buildIndexParams);
+
+            // Then: the vectors arrived as on-heap float[][] batches, in order, with their doc ids
+            ArgumentCaptor<float[][]> vectorsCaptor = ArgumentCaptor.forClass(float[][].class);
+            mockedJNIService.verify(
+                () -> JNIService.insertToIndex(
+                    eq(new int[] { 0, 1 }),
+                    vectorsCaptor.capture(),
+                    eq(Map.of("index", "param")),
+                    eq(100L),
+                    eq(engine)
+                )
+            );
+            mockedJNIService.verify(
+                () -> JNIService.insertToIndex(
+                    eq(new int[] { 2 }),
+                    vectorsCaptor.capture(),
+                    eq(Map.of("index", "param")),
+                    eq(100L),
+                    eq(engine)
+                )
+            );
+            assertEquals(2, vectorsCaptor.getAllValues().get(0).length);
+            assertArrayEquals(new float[] { 1, 2 }, vectorsCaptor.getAllValues().get(0)[0], 0.0f);
+            assertArrayEquals(new float[] { 2, 3 }, vectorsCaptor.getAllValues().get(0)[1], 0.0f);
+            assertEquals(1, vectorsCaptor.getAllValues().get(1).length);
+            assertArrayEquals(new float[] { 3, 4 }, vectorsCaptor.getAllValues().get(1)[0], 0.0f);
+
+            mockedJNIService.verify(
+                () -> JNIService.writeIndex(eq(indexOutputWithBuffer), eq(100L), eq(engine), eq(Map.of("index", "param")), eq(false))
+            );
+            // And no off-heap transfer machinery was touched
+            mockedOffHeapVectorTransferFactory.verifyNoInteractions();
+        }
+    }
 
     @SneakyThrows
     public void testBuildAndWrite() {

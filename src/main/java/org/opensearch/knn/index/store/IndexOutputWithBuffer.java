@@ -42,6 +42,20 @@ public class IndexOutputWithBuffer {
     }
 
     /**
+     * Writes {@code length} bytes of {@code src} starting at {@code offset} straight to the underlying
+     * {@link IndexOutput}. This is the write path for a pure-Java {@link org.opensearch.knn.jni.NativeEngineService}
+     * implementation, which streams its serialized index from its own on-heap buffers rather than through
+     * the JNI transfer buffer above.
+     */
+    public void writeBytes(byte[] src, int offset, int length) {
+        try {
+            indexOutput.writeBytes(src, offset, length);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
      * Writes to the {@link IndexOutput} by buffering bytes into a new buffer of custom size.
      *
      * @param inputStream       The stream from which we are reading bytes to write

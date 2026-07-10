@@ -1,0 +1,19 @@
+# Linker version script applied to every sandbox tenant JNI library by knn_sandbox_add_jni_library.
+#
+# A tenant library may statically embed its own copy of a vector library (e.g. an upstream faiss at a
+# DIFFERENT commit than the faiss embedded in libopensearchknn_faiss); both are dlopen'd into the same JVM.
+# To prevent the two symbol sets from interposing (an ODR hazard that could route calls into the wrong
+# build), we export ONLY the JNI entry points and the JNI lifecycle hooks; every other symbol (the embedded
+# vector library, the marshalling helpers, the tenant's own wrapper code) is local to the library.
+#
+# Tenant native methods live under org.opensearch.knn.sandbox.<tenant>, so they mangle to
+# Java_org_opensearch_knn_sandbox_<tenant>_*. The broader Java_org_opensearch_knn_* pattern keeps this
+# robust to the exact package.
+{
+  global:
+    JNI_OnLoad;
+    JNI_OnUnload;
+    Java_org_opensearch_knn_*;
+  local:
+    *;
+};
