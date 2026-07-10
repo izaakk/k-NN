@@ -8,6 +8,7 @@ package org.opensearch.knn.grpc.proto.request.search.query;
 import lombok.experimental.UtilityClass;
 import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.query.QueryBuilder;
+import org.opensearch.knn.index.engine.KNNEngine;
 import org.opensearch.knn.index.query.KNNQueryBuilder;
 import org.opensearch.knn.index.query.parser.KNNQueryBuilderParser;
 import org.opensearch.knn.index.query.request.MethodParameter;
@@ -140,6 +141,13 @@ public class KNNQueryBuilderProtoUtils {
             // Find the MethodParameter enum (same as XContent parsing)
             MethodParameter parameter = MethodParameter.enumOf(name);
             if (parameter == null) {
+                if (KNNEngine.isEngineContributedQueryParameter(name)) {
+                    // Mirror MethodParametersParser#fromXContent: a registered engine declared this name
+                    // (KNNEngineDefinition#engineSpecificQueryParameters); pass it through for the engine-aware
+                    // validation in KNNQueryBuilder#doToQuery. Unreachable in a default build.
+                    processedMethodParameters.put(name, value);
+                    continue;
+                }
                 throw new IllegalArgumentException("unknown method parameter found [" + name + "]");
             }
 
