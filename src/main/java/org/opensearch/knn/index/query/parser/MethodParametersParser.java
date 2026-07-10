@@ -20,12 +20,15 @@ import org.opensearch.core.common.io.stream.StreamInput;
 import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.core.xcontent.XContentParser;
+import org.opensearch.knn.common.KNNConstants;
+import org.opensearch.knn.index.engine.KNNEngine;
 import org.opensearch.knn.index.query.request.MethodParameter;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -50,9 +53,14 @@ public class MethodParametersParser {
                 if (validationException != null) {
                     errors.add(validationException.getMessage());
                 }
-            } else { // Should never happen if used in the right sequence
+            } else if (!KNNEngine.isEngineContributedQueryParameter(methodParameter.getKey())) {
+                // Should never happen if used in the right sequence
                 errors.add(methodParameter.getKey() + " is not a valid method parameter");
             }
+            // A name declared by a registered engine (KNNEngineDefinition#engineSpecificQueryParameters) is
+            // deferred: the engine-aware validation in KNNQueryBuilder#doToQuery judges its value against the
+            // engine's KNNLibrarySearchContext. In a default build no engine is registered, so this method
+            // behaves exactly as upstream.
         }
 
         if (!errors.isEmpty()) {
@@ -70,6 +78,8 @@ public class MethodParametersParser {
         }
 
         final Map<String, Object> methodParameters = new HashMap<>();
+        // Positional block — unchanged from upstream. Core-known parameters always cross the wire in the
+        // battle-tested enum-keyed format, including the typed parse() normalization on read.
         for (final MethodParameter methodParameter : MethodParameter.values()) {
             if (minClusterVersionCheck.apply(methodParameter.getName())) {
                 String name = in.readString();
@@ -78,6 +88,12 @@ public class MethodParametersParser {
                     methodParameters.put(name, methodParameter.parse(value));
                 }
             }
+        }
+        // Appendix — strictly symmetric with streamOutput's write condition: parameters contributed by a
+        // registered engine (names unknown to the core enum) ride an appended map once the whole cluster
+        // understands it. Empty on any default build.
+        if (minClusterVersionCheck.apply(KNNConstants.GENERIC_METHOD_PARAMETERS_FEATURE)) {
+            methodParameters.putAll(in.readMap(StreamInput::readString, StreamInput::readGenericValue));
         }
 
         return !methodParameters.isEmpty() ? methodParameters : null;
@@ -90,14 +106,46 @@ public class MethodParametersParser {
             out.writeBoolean(false);
         } else {
             out.writeBoolean(true);
-            // All values are written to deserialize without ambiguity
+            // Positional block — unchanged from upstream, always written. All values are written to
+            // deserialize without ambiguity.
             for (final MethodParameter methodParameter : MethodParameter.values()) {
                 if (minClusterVersionCheck.apply(methodParameter.getName())) {
                     out.writeString(methodParameter.getName());
                     out.writeGenericValue(methodParameters.get(methodParameter.getName()));
                 }
             }
+            // Appendix: parameters contributed by a registered engine (names unknown to the core enum),
+            // written only when the whole cluster understands it. Empty in any default build — the parse
+            // layers admit a non-core name only when a registered engine declared it.
+            final Map<String, Object> engineParameters = engineContributedSubset(methodParameters);
+            if (minClusterVersionCheck.apply(KNNConstants.GENERIC_METHOD_PARAMETERS_FEATURE)) {
+                out.writeMap(engineParameters, StreamOutput::writeString, StreamOutput::writeGenericValue);
+            } else if (engineParameters.isEmpty() == false) {
+                // A node below the feature version cannot receive these. Failing loudly here is deliberate:
+                // the alternative is the parameter silently vanishing on the hop to that node — a query that
+                // "succeeds" with the wrong search parameters.
+                throw new IllegalArgumentException(
+                    String.format(
+                        Locale.ROOT,
+                        "engine-specific method_parameters %s require every node in the cluster to support %s",
+                        engineParameters.keySet(),
+                        KNNConstants.GENERIC_METHOD_PARAMETERS_FEATURE
+                    )
+                );
+            }
         }
+    }
+
+    // The subset of methodParameters whose names are unknown to the core MethodParameter enum — i.e. the
+    // parameters contributed by a registered engine.
+    private static Map<String, Object> engineContributedSubset(Map<String, ?> methodParameters) {
+        final Map<String, Object> engineParameters = new HashMap<>();
+        for (final Map.Entry<String, ?> entry : methodParameters.entrySet()) {
+            if (MethodParameter.enumOf(entry.getKey()) == null) {
+                engineParameters.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return engineParameters;
     }
 
     public static void doXContent(final XContentBuilder builder, final Map<String, ?> methodParameters) throws IOException {
@@ -119,12 +167,20 @@ public class MethodParametersParser {
             throw new ParsingException(parser.getTokenLocation(), METHOD_PARAMS_FIELD.getPreferredName() + " cannot be empty");
         }
 
-        final Map<String, ?> methodParameters = new HashMap<>();
+        final Map<String, Object> methodParameters = new HashMap<>();
         for (Map.Entry<String, Object> requestParameter : methodParametersJson.entrySet()) {
             final String name = requestParameter.getKey();
             final Object value = requestParameter.getValue();
             final MethodParameter parameter = MethodParameter.enumOf(name);
             if (parameter == null) {
+                if (KNNEngine.isEngineContributedQueryParameter(name)) {
+                    // A registered engine declared this name (KNNEngineDefinition#engineSpecificQueryParameters);
+                    // pass the raw value through for the engine-aware validation in KNNQueryBuilder#doToQuery,
+                    // which judges it against the engine's KNNLibrarySearchContext. Unreachable in a default
+                    // build, where the rejection below is identical to upstream.
+                    methodParameters.put(name, value);
+                    continue;
+                }
                 throw new ParsingException(parser.getTokenLocation(), "[" + NAME + "] unknown method parameter found [" + name + "]");
             }
 

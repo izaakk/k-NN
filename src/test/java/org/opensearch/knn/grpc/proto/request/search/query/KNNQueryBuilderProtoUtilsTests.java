@@ -298,7 +298,9 @@ public class KNNQueryBuilderProtoUtilsTests extends OpenSearchTestCase {
 
     @Test
     public void testFromProto_invalidMethodParameter() {
-        // Test with invalid method parameter
+        // Test with invalid method parameter. No engine is registered on the core test classpath, so an
+        // unknown name is rejected exactly as upstream; deferral of engine-declared names (see
+        // KNNEngineDefinition#engineSpecificQueryParameters) is exercised by the sandbox fixture tests.
         ObjectMap.Value invalidValue = ObjectMap.Value.newBuilder().setString("invalid_ef_search").build();
         ObjectMap methodParams = ObjectMap.newBuilder().putFields("invalid_param_name", invalidValue).build();
 
