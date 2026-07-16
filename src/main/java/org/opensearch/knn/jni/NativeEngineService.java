@@ -22,6 +22,10 @@ import java.util.Map;
  * support a particular operation (for example template-based builds or radial search) should throw
  * {@link UnsupportedOperationException}; the corresponding capability checks in the core typically keep those
  * paths unreachable, so the throws are defensive backstops.
+ *
+ * <p>Implementations must be thread-safe: {@link JNIService}'s static methods are invoked concurrently from
+ * search and merge threads. The service instance is created eagerly at engine discovery, but it must defer any
+ * native library loading to first use (via {@link KNNLibraryLoader#loadLibraryByVariant(String)}).
  */
 @ExperimentalApi
 public interface NativeEngineService {

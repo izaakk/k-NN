@@ -81,6 +81,17 @@ public class FixtureEngineRegistrationTests extends OpenSearchTestCase {
         assertSame(fixture, KNNEngine.getEngineNameFromPath("_0_165_target_field" + fixture.getCompoundExtension()));
     }
 
+    public void testBrokenDefinitionIsSkippedWithoutPoisoningRegistration() {
+        // BadFixtureEngineProvider (registered alongside the fixture) throws from library(); the registry
+        // skips it, so registration survives and every other engine still resolves.
+        expectThrows(IllegalArgumentException.class, () -> KNNEngine.getEngine("bad_fixture"));
+        assertNotNull(KNNEngine.getEngine(FIXTURE_ENGINE_NAME));
+        assertSame(KNNEngine.FAISS, KNNEngine.getEngine("faiss"));
+        assertSame(KNNEngine.LUCENE, KNNEngine.getEngine("lucene"));
+        assertSame(KNNEngine.NMSLIB, KNNEngine.getEngine("nmslib"));
+        assertSame(KNNEngine.UNDEFINED, KNNEngine.getEngine("undefined"));
+    }
+
     public void testEngineExposesItsSearchContext() {
         final KNNEngine fixture = KNNEngine.getEngine(FIXTURE_ENGINE_NAME);
         final QueryContext queryContext = new QueryContext(VectorQueryType.K);

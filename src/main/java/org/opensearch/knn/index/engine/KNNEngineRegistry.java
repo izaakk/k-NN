@@ -6,7 +6,9 @@
 package org.opensearch.knn.index.engine;
 
 import lombok.extern.log4j.Log4j2;
+import org.opensearch.knn.jni.NativeEngineService;
 
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -16,34 +18,33 @@ import java.util.ServiceLoader;
 import java.util.Set;
 
 /**
- * Discovers engines contributed at runtime by modules on the classpath, via {@link java.util.ServiceLoader} of
- * {@link KNNEngineDefinition}. This is the generic extension point: the core names no specific engine and holds
- * no compile-time reference to one. Unlike a single reserved slot, this registry supports any number of
- * registered engines simultaneously — each becomes a first-class {@link KNNEngine} instance (see
- * {@link KNNEngine#getEngine(String)} / {@link KNNEngine#values()}).
- *
- * <p>{@link KNNEngine} consults {@link #all()} once at class load to build its engine table; each registered
- * engine carries its own {@code NativeEngineService}, so {@code JNIService} dispatches native operations by
- * asking the engine instance — the registry is not consulted on the query/index hot path. When nothing is
- * registered (the default build) the registry is empty and the plugin behaves exactly as upstream.
+ * Discovers engines contributed at runtime via {@link java.util.ServiceLoader} of {@link KNNEngineDefinition}.
+ * Each discovered definition is fully materialized here into a {@link RegisteredEngine}; a definition that
+ * throws is skipped with a warning rather than failing the plugin — one bad experimental jar must not take the
+ * node down. {@link KNNEngine} consults {@link #all()} once at class load; the registry is not on the
+ * query/index hot path. When nothing is registered (the default build) the registry is empty.
  */
 @Log4j2
 final class KNNEngineRegistry {
 
     // Built-in engine names, spelled out here (not read off KNNEngine) because this registry loads during
-    // KNNEngine's class initialization. A definition colliding with one of these is skipped with a warning
-    // rather than failing the plugin: one bad experimental jar must not take the node down.
-    private static final Set<String> BUILT_IN_ENGINE_NAMES = Set.of("faiss", "lucene", "nmslib", "undefined");
+    // KNNEngine's class initialization. KNNEngine asserts its built-ins against this set when seeding.
+    static final Set<String> BUILT_IN_ENGINE_NAMES = Set.of("faiss", "lucene", "nmslib", "undefined");
 
-    private static final Map<String, KNNEngineDefinition> BY_NAME;
+    /** A fully-materialized registered engine; every definition method has already been invoked successfully. */
+    record RegisteredEngine(String engineName, KNNLibrary library, NativeEngineService nativeService, Set<String> queryParameterNames) {
+    }
+
+    private static final Map<String, RegisteredEngine> BY_NAME;
     private static final Set<String> QUERY_PARAMETER_NAMES;
 
     static {
-        final Map<String, KNNEngineDefinition> byName = new LinkedHashMap<>();
+        final Map<String, RegisteredEngine> byName = new LinkedHashMap<>();
         final Set<String> queryParameterNames = new HashSet<>();
         for (KNNEngineDefinition definition : ServiceLoader.load(KNNEngineDefinition.class, KNNEngineRegistry.class.getClassLoader())) {
             try {
-                final String key = definition.engineName().toLowerCase(Locale.ROOT);
+                final String name = definition.engineName();
+                final String key = name.toLowerCase(Locale.ROOT);
                 if (BUILT_IN_ENGINE_NAMES.contains(key)) {
                     log.warn(
                         "KNNEngineDefinition [{}] collides with built-in engine name [{}]; ignoring",
@@ -56,11 +57,14 @@ final class KNNEngineRegistry {
                     log.warn("Duplicate KNNEngineDefinition for name [{}]; ignoring [{}]", key, definition.getClass().getName());
                     continue;
                 }
-                // Read the parameter names before registering, so a definition that throws here is skipped
-                // entirely rather than half-registered.
-                final Set<String> engineQueryParameters = definition.engineSpecificQueryParameters();
-                byName.put(key, definition);
-                queryParameterNames.addAll(engineQueryParameters);
+                final RegisteredEngine engine = new RegisteredEngine(
+                    name,
+                    definition.library(),
+                    definition.nativeService(),
+                    Set.copyOf(definition.engineSpecificQueryParameters())
+                );
+                byName.put(key, engine);
+                queryParameterNames.addAll(engine.queryParameterNames());
             } catch (Exception | LinkageError e) {
                 log.warn("Skipping misconfigured KNNEngineDefinition", e);
             }
@@ -71,8 +75,8 @@ final class KNNEngineRegistry {
 
     private KNNEngineRegistry() {}
 
-    /** All engine definitions discovered on the classpath (empty in a default build). */
-    static Iterable<KNNEngineDefinition> all() {
+    /** All registered engines discovered on the classpath (empty in a default build). */
+    static Collection<RegisteredEngine> all() {
         return BY_NAME.values();
     }
 

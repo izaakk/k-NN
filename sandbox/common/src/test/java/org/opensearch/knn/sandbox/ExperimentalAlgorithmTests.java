@@ -14,7 +14,7 @@ import org.opensearch.test.OpenSearchTestCase;
  */
 public class ExperimentalAlgorithmTests extends OpenSearchTestCase {
 
-    @ExperimentalAlgorithm(description = "Test algorithm for validation", since = "3.7.0")
+    @ExperimentalAlgorithm(description = "Test algorithm for validation", since = "3.8.0")
     private static class SampleExperimentalAlgorithm {
         // Intentionally empty — used only to verify annotation behavior
     }
@@ -29,7 +29,7 @@ public class ExperimentalAlgorithmTests extends OpenSearchTestCase {
         ExperimentalAlgorithm annotation = SampleExperimentalAlgorithm.class.getAnnotation(ExperimentalAlgorithm.class);
         assertNotNull("RUNTIME retention must make the annotation reflectively visible", annotation);
         assertEquals("Test algorithm for validation", annotation.description());
-        assertEquals("3.7.0", annotation.since());
+        assertEquals("3.8.0", annotation.since());
     }
 
     public void testAnnotationDefaultValues() {

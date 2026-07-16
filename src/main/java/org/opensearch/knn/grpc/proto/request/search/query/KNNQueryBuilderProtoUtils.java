@@ -142,9 +142,7 @@ public class KNNQueryBuilderProtoUtils {
             MethodParameter parameter = MethodParameter.enumOf(name);
             if (parameter == null) {
                 if (KNNEngine.isEngineContributedQueryParameter(name)) {
-                    // Mirror MethodParametersParser#fromXContent: a registered engine declared this name
-                    // (KNNEngineDefinition#engineSpecificQueryParameters); pass it through for the engine-aware
-                    // validation in KNNQueryBuilder#doToQuery. Unreachable in a default build.
+                    // Engine-declared name: defer to the engine-aware validation in KNNQueryBuilder#doToQuery
                     processedMethodParameters.put(name, value);
                     continue;
                 }

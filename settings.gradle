@@ -18,13 +18,8 @@ include ":qa:rolling-upgrade"
 include ":qa:restart-upgrade"
 include ":remote-index-build-client"
 
-// Experimental sandbox tenants (see sandbox/README.md). Opt-in only: by default the sandbox/ tree is
-// excluded from the build graph entirely — not compiled, not tested, not bundled — so a default build
-// (including scripts/build.sh) produces a plugin identical to upstream. Enable with
-// -Pknn.sandbox.enabled=true (gate agreed on #3283/#3296; readable from the command line,
-// gradle.properties, or ORG_GRADLE_PROJECT_* environment — the same provider is read in build.gradle so
-// the flag can never half-apply). Mirrors the OpenSearch core sandbox pattern, where sandbox subprojects
-// join the graph only when explicitly enabled.
+// The sandbox/ tree is excluded from the build graph unless -Pknn.sandbox.enabled=true; releases refuse
+// the flag — see sandbox/README.md.
 if (providers.gradleProperty('knn.sandbox.enabled').getOrElse('false') == 'true') {
     include ":sandbox"
     new File(rootProject.projectDir, 'sandbox').eachDir { dir ->

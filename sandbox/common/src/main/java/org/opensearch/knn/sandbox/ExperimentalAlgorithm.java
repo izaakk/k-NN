@@ -12,31 +12,17 @@ import java.lang.annotation.Target;
 
 /**
  * Marker annotation indicating that a class is an experimental algorithm or component
- * within the k-NN sandbox module.
- *
- * <p>Classes annotated with {@code @ExperimentalAlgorithm} are not part of the stable,
- * production-ready API surface. They may change, be renamed, or be removed without
- * prior notice in any future release.</p>
+ * within the k-NN sandbox module. Annotated classes are not part of the stable,
+ * production-ready API surface: they may change, be renamed, or be removed without
+ * prior notice in any future release. Metadata: {@link #description()} and {@link #since()}.
  *
  * <p>Usage example:</p>
  * <pre>{@code
- * @ExperimentalAlgorithm(
- *     description = "Graph-based approximate nearest neighbor using vamana algorithm",
- *     since = "3.8.0"
- * )
- * public class VamanaAlgorithm {
- *     // experimental implementation
- * }
+ * @ExperimentalAlgorithm(description = "Vamana graph-based ANN", since = "3.8.0")
+ * public class VamanaAlgorithm { ... }
  * }</pre>
  *
- * <p><strong>Graduation Criteria</strong></p>
- * <p>An experimental component may graduate to the main package when it meets:</p>
- * <ul>
- *   <li>Stability: No critical bugs after a minimum incubation period</li>
- *   <li>Performance: Meets or exceeds benchmarks comparable to existing stable algorithms</li>
- *   <li>Test coverage: Comprehensive unit and integration tests</li>
- *   <li>Community feedback: Positive reception from early adopters</li>
- * </ul>
+ * <p>See sandbox/README.md for the sandbox lifecycle and graduation criteria.</p>
  */
 @Retention(RetentionPolicy.RUNTIME)
 @Target({ ElementType.TYPE })

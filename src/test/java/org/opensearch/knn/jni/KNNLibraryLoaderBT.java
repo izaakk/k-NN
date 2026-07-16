@@ -6,6 +6,7 @@
 package org.opensearch.knn.jni;
 
 import org.opensearch.knn.KNNTestCase;
+import org.opensearch.knn.common.KNNConstants;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -29,13 +30,33 @@ public class KNNLibraryLoaderBT extends KNNTestCase {
         Method[] methods = KNNLibraryLoader.class.getDeclaredMethods();
 
         for (Method method : methods) {
-            if (!Modifier.isPrivate(method.getModifiers())) {
+            // Skip parameterized loaders (e.g. the generic loadLibraryByVariant(baseName)); they cannot be
+            // invoked blindly and are covered through their no-arg callers (loadFaissLibrary, loadSimdLibrary).
+            if (!Modifier.isPrivate(method.getModifiers()) && method.getParameterCount() == 0) {
                 try {
                     method.invoke(null);
                 } catch (Exception e) {
                     fail("Library load failed for method " + method.getName() + ": " + e.getMessage());
                 }
             }
+        }
+    }
+
+    /**
+     * Directly exercises the public variant-selecting loader with a base library name. The Faiss base name
+     * resolves to whichever variant this system supports; loading is idempotent, so this passes whether or
+     * not the no-arg loaders ran first.
+     */
+    public void testLoadLibraryByVariant_whenGivenBaseName_thenLoadsSupportedVariant() {
+        try {
+            KNNLibraryLoader.loadLibraryByVariant(KNNConstants.FAISS_JNI_LIBRARY_NAME);
+        } catch (UnsatisfiedLinkError e) {
+            fail(
+                "loadLibraryByVariant failed to resolve and load a variant of "
+                    + KNNConstants.FAISS_JNI_LIBRARY_NAME
+                    + ": "
+                    + e.getMessage()
+            );
         }
     }
 }

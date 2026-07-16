@@ -357,17 +357,9 @@ opensearchplugin {
     noticeFile = rootProject.file('NOTICE.txt')
 }
 
-// ---------------------------------------------------------------------------------------------------------
-// Experimental sandbox tenants (see sandbox/README.md). By default the sandbox/ tree is excluded from the
-// build graph entirely (see settings.gradle), no sandbox jar exists, and this block is inert — the produced
-// plugin is identical to upstream. When the build opts in with -Pknn.sandbox.enabled=true, every sandbox
-// subproject jar is bundled into the plugin zip as a RUNTIME-ONLY artifact: the root project declares NO
-// compile/api dependency on any sandbox project (sandbox classes never leak onto the root compileClasspath);
-// the jars are only copied into the bundlePlugin zip so their ServiceLoader providers (see
-// org.opensearch.knn.index.engine.KNNEngineDefinition) are discoverable at runtime.
-// Mirroring the OpenSearch core sandbox pattern's double condition, sandbox tenants can only ever ship in a
-// SNAPSHOT build; a release build with the flag on fails loudly rather than silently dropping the tenants.
-// ---------------------------------------------------------------------------------------------------------
+// Sandbox tenant jars are bundled into the plugin zip only with -Pknn.sandbox.enabled=true and only for a
+// SNAPSHOT build (a release build with the flag on fails loudly). Runtime-only: the root project never
+// compiles against sandbox projects; the jars are copied in for ServiceLoader discovery. See sandbox/README.md.
 def knnSandboxEnabled = providers.gradleProperty('knn.sandbox.enabled').getOrElse('false') == 'true'
 if (knnSandboxEnabled) {
     if (!isSnapshot) {
@@ -381,8 +373,7 @@ if (knnSandboxEnabled) {
     tasks.named("bundlePlugin").configure { bundleTask ->
         sandboxSubprojects.each { sandboxProject ->
             bundleTask.dependsOn "${sandboxProject.path}:jar"
-            // Reference each sandbox jar lazily via its archive file provider so it lands at the root of
-            // the plugin zip alongside the other runtime jars.
+            // Lazy archive-file reference; the jar lands at the root of the zip with the other runtime jars.
             bundleTask.from(sandboxProject.tasks.named('jar').flatMap { it.archiveFile })
         }
     }
@@ -568,10 +559,8 @@ tasks.register('cmakeJniLib', Exec) {
     args.add("-DCOMMIT_LIB_PATCHES=${commit_lib_patches}")
     args.add("-DAPPLY_LIB_PATCHES=${apply_lib_patches}")
     args.add("-DCMAKE_POLICY_VERSION_MINIMUM=3.5")
-    // Opt-in configure of experimental sandbox tenant JNI libraries (see jni/sandbox/). Never on by default:
-    // a default build configures exactly the upstream native libraries. Tenant-specific cmake overrides
-    // (e.g. a tenant's vendored-runtime location) pass through -Psandbox.cmake.args, semicolon-separated:
-    //   -Psandbox.cmake.args="-DMY_TENANT_RUNTIME_PREFIX=/opt/runtime;-DMY_OTHER_FLAG=x"
+    // Opt-in configure of sandbox tenant JNI libraries (see jni/sandbox/). Tenant cmake overrides pass
+    // through -Psandbox.cmake.args, semicolon-separated: -Psandbox.cmake.args="-DFLAG_A=x;-DFLAG_B=y"
     if (knnSandboxEnabled) {
         args.add("-DCONFIG_SANDBOX=ON")
         if (project.hasProperty('sandbox.cmake.args')) {
@@ -616,8 +605,7 @@ tasks.register('buildJniLib', Exec) {
     if (project.hasProperty('knn_libs')) {
         knn_libs = ['opensearchknn_common'] + project.knn_libs.split(',').collect { it.trim() }
     }
-    // Build each opted-in sandbox tenant's isolated JNI library. By convention a tenant with
-    // jni/sandbox/<tenant>/tenant.cmake builds `opensearchknn_<tenant>`. Nothing here names a tenant.
+    // Each opted-in tenant with jni/sandbox/<tenant>/tenant.cmake builds `opensearchknn_<tenant>`.
     if (knnSandboxEnabled) {
         rootProject.subprojects.findAll { it.path.startsWith(':sandbox:') }.each { sandboxProject ->
             if (rootProject.file("jni/sandbox/${sandboxProject.name}/tenant.cmake").exists()) {

@@ -57,10 +57,6 @@ public class MethodParametersParser {
                 // Should never happen if used in the right sequence
                 errors.add(methodParameter.getKey() + " is not a valid method parameter");
             }
-            // A name declared by a registered engine (KNNEngineDefinition#engineSpecificQueryParameters) is
-            // deferred: the engine-aware validation in KNNQueryBuilder#doToQuery judges its value against the
-            // engine's KNNLibrarySearchContext. In a default build no engine is registered, so this method
-            // behaves exactly as upstream.
         }
 
         if (!errors.isEmpty()) {
@@ -78,8 +74,6 @@ public class MethodParametersParser {
         }
 
         final Map<String, Object> methodParameters = new HashMap<>();
-        // Positional block — unchanged from upstream. Core-known parameters always cross the wire in the
-        // battle-tested enum-keyed format, including the typed parse() normalization on read.
         for (final MethodParameter methodParameter : MethodParameter.values()) {
             if (minClusterVersionCheck.apply(methodParameter.getName())) {
                 String name = in.readString();
@@ -89,9 +83,6 @@ public class MethodParametersParser {
                 }
             }
         }
-        // Appendix — strictly symmetric with streamOutput's write condition: parameters contributed by a
-        // registered engine (names unknown to the core enum) ride an appended map once the whole cluster
-        // understands it. Empty on any default build.
         if (minClusterVersionCheck.apply(KNNConstants.GENERIC_METHOD_PARAMETERS_FEATURE)) {
             methodParameters.putAll(in.readMap(StreamInput::readString, StreamInput::readGenericValue));
         }
@@ -106,24 +97,19 @@ public class MethodParametersParser {
             out.writeBoolean(false);
         } else {
             out.writeBoolean(true);
-            // Positional block — unchanged from upstream, always written. All values are written to
-            // deserialize without ambiguity.
+            // All values are written to deserialize without ambiguity
             for (final MethodParameter methodParameter : MethodParameter.values()) {
                 if (minClusterVersionCheck.apply(methodParameter.getName())) {
                     out.writeString(methodParameter.getName());
                     out.writeGenericValue(methodParameters.get(methodParameter.getName()));
                 }
             }
-            // Appendix: parameters contributed by a registered engine (names unknown to the core enum),
-            // written only when the whole cluster understands it. Empty in any default build — the parse
-            // layers admit a non-core name only when a registered engine declared it.
+            // Appendix for engine-contributed names; reader and writer must stay strictly symmetric on this version gate
             final Map<String, Object> engineParameters = engineContributedSubset(methodParameters);
             if (minClusterVersionCheck.apply(KNNConstants.GENERIC_METHOD_PARAMETERS_FEATURE)) {
                 out.writeMap(engineParameters, StreamOutput::writeString, StreamOutput::writeGenericValue);
             } else if (engineParameters.isEmpty() == false) {
-                // A node below the feature version cannot receive these. Failing loudly here is deliberate:
-                // the alternative is the parameter silently vanishing on the hop to that node — a query that
-                // "succeeds" with the wrong search parameters.
+                // Fail loudly rather than silently drop the parameter on the hop to a node that cannot receive it
                 throw new IllegalArgumentException(
                     String.format(
                         Locale.ROOT,
@@ -136,8 +122,6 @@ public class MethodParametersParser {
         }
     }
 
-    // The subset of methodParameters whose names are unknown to the core MethodParameter enum — i.e. the
-    // parameters contributed by a registered engine.
     private static Map<String, Object> engineContributedSubset(Map<String, ?> methodParameters) {
         final Map<String, Object> engineParameters = new HashMap<>();
         for (final Map.Entry<String, ?> entry : methodParameters.entrySet()) {
@@ -174,10 +158,7 @@ public class MethodParametersParser {
             final MethodParameter parameter = MethodParameter.enumOf(name);
             if (parameter == null) {
                 if (KNNEngine.isEngineContributedQueryParameter(name)) {
-                    // A registered engine declared this name (KNNEngineDefinition#engineSpecificQueryParameters);
-                    // pass the raw value through for the engine-aware validation in KNNQueryBuilder#doToQuery,
-                    // which judges it against the engine's KNNLibrarySearchContext. Unreachable in a default
-                    // build, where the rejection below is identical to upstream.
+                    // Engine-declared name: pass the raw value through; engine-aware validation runs in KNNQueryBuilder#doToQuery
                     methodParameters.put(name, value);
                     continue;
                 }

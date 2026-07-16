@@ -4,20 +4,16 @@
  */
 
 /**
- * The {@code org.opensearch.knn.sandbox} package provides a first-class incubation
- * environment for experimental algorithms, optimizations, and architectural components
- * within the OpenSearch k-NN plugin.
+ * Incubation environment for experimental algorithms, optimizations, and architectural
+ * components within the OpenSearch k-NN plugin.
  *
- * <p>All classes in this package and its sub-packages are considered <strong>experimental</strong>
- * and are not included in production release artifacts. They follow a defined lifecycle:</p>
- * <ol>
- *   <li>New ideas land in this sandbox module.</li>
- *   <li>They are exposed to early adopters and community feedback under an explicit experimental label.</li>
- *   <li>Once they meet stability, performance, and test coverage thresholds, they graduate to the main package.</li>
- * </ol>
+ * <p>All classes in this package and its sub-packages are <strong>experimental</strong>. Sandbox jars
+ * are bundled only into snapshot builds explicitly flagged with {@code -Pknn.sandbox.enabled=true};
+ * they are never included in release artifacts.</p>
  *
  * <p>Every public class in this package should be annotated with
- * {@link org.opensearch.knn.sandbox.ExperimentalAlgorithm @ExperimentalAlgorithm}.</p>
+ * {@link org.opensearch.knn.sandbox.ExperimentalAlgorithm @ExperimentalAlgorithm}.
+ * See sandbox/README.md for the sandbox lifecycle and graduation criteria.</p>
  *
  * @see org.opensearch.knn.sandbox.ExperimentalAlgorithm
  */
