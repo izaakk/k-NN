@@ -175,7 +175,10 @@ and, on Linux, links with `-Wl,--exclude-libs,ALL` so symbols from statically li
 local — a guarantee that is Linux-only today (macOS/Windows un-addressed) — plus an `$ORIGIN` rpath for
 any runtime `.so` shipped alongside. This matters most when the tenant embeds a different version of a C++ library the
 plugin already ships (e.g. faiss): two exported `faiss::*` symbol sets in one JVM interpose and route
-calls into the wrong build. Verify — the dynamic table should list only `Java_*`/`JNI_*` entry points
+calls into the wrong build. One thing symbol isolation cannot contain is the threading runtime: link
+OpenMP **dynamically** (`libgomp.so`) so the process shares a single runtime with the built-in libraries —
+never statically embed an OpenMP runtime (two runtimes in one JVM is a known crash/oversubscription
+hazard). Verify — the dynamic table should list only `Java_*`/`JNI_*` entry points
 (plus linker-synthesized symbols such as `__bss_start`/`_edata`/`_end`):
 
 ```bash
@@ -214,7 +217,7 @@ Nothing to copy into the tenant's build.gradle — the wiring lives once in
 [`sandbox/build.gradle`](build.gradle).
 
 To run a live node: `./gradlew run -Pknn.sandbox.enabled=true`, then map a field with
-`"engine": "acme"`. On a default build the same mapping is rejected with `Invalid engine type: acme` —
+`"engine": "acme"`. On a default build the same mapping is rejected as an invalid engine (verified live: `mapper_parsing_exception: Invalid engine: acme`) —
 correct behavior: the tenant does not exist there.
 
 ## CI

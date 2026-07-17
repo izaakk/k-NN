@@ -96,6 +96,20 @@ public class MethodParametersParser {
         if (methodParameters == null || methodParameters.isEmpty()) {
             out.writeBoolean(false);
         } else {
+            final Map<String, Object> engineParameters = engineContributedSubset(methodParameters);
+            final boolean appendixSupported = minClusterVersionCheck.apply(KNNConstants.GENERIC_METHOD_PARAMETERS_FEATURE);
+            if (appendixSupported == false && engineParameters.isEmpty() == false) {
+                // Fail loudly, before any bytes are written, rather than silently drop the parameter on the
+                // hop to a node that cannot receive it
+                throw new IllegalArgumentException(
+                    String.format(
+                        Locale.ROOT,
+                        "engine-specific method_parameters %s require every node in the cluster to support %s",
+                        engineParameters.keySet(),
+                        KNNConstants.GENERIC_METHOD_PARAMETERS_FEATURE
+                    )
+                );
+            }
             out.writeBoolean(true);
             // All values are written to deserialize without ambiguity
             for (final MethodParameter methodParameter : MethodParameter.values()) {
@@ -105,19 +119,8 @@ public class MethodParametersParser {
                 }
             }
             // Appendix for engine-contributed names; reader and writer must stay strictly symmetric on this version gate
-            final Map<String, Object> engineParameters = engineContributedSubset(methodParameters);
-            if (minClusterVersionCheck.apply(KNNConstants.GENERIC_METHOD_PARAMETERS_FEATURE)) {
+            if (appendixSupported) {
                 out.writeMap(engineParameters, StreamOutput::writeString, StreamOutput::writeGenericValue);
-            } else if (engineParameters.isEmpty() == false) {
-                // Fail loudly rather than silently drop the parameter on the hop to a node that cannot receive it
-                throw new IllegalArgumentException(
-                    String.format(
-                        Locale.ROOT,
-                        "engine-specific method_parameters %s require every node in the cluster to support %s",
-                        engineParameters.keySet(),
-                        KNNConstants.GENERIC_METHOD_PARAMETERS_FEATURE
-                    )
-                );
             }
         }
     }

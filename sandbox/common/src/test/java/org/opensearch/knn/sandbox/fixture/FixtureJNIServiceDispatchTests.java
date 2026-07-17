@@ -61,9 +61,9 @@ public class FixtureJNIServiceDispatchTests extends OpenSearchTestCase {
                 3,
                 Map.of(METHOD_PARAMETER_FIXTURE_WINDOW, 7),
                 fixtureEngine,
-                null,
-                0,
-                null
+                new long[] { 11L, 12L },
+                1,
+                new int[] { 9 }
             );
             assertEquals(3, results.length);
             assertEquals(0, results[0].getId());
@@ -77,10 +77,24 @@ public class FixtureJNIServiceDispatchTests extends OpenSearchTestCase {
         assertTrue(opLog.get(2).startsWith("writeIndex"));
         assertTrue(opLog.get(3).startsWith("free"));
         assertTrue(opLog.get(4).startsWith("loadIndex"));
-        // The engine-specific query parameter reached the engine's service intact.
+        // The engine-specific query parameter and the filter/nested arrays reached the engine's service intact.
         assertTrue(opLog.get(5).startsWith("queryIndex"));
         assertTrue(opLog.get(5).contains(METHOD_PARAMETER_FIXTURE_WINDOW + "=7"));
+        assertTrue(opLog.get(5).contains("filteredIds=2, filterIdsType=1, parentIds=1"));
         assertTrue(opLog.get(6).startsWith("free"));
+    }
+
+    public void testDispatchIsIsolatedPerEngine() {
+        // A call to one registered engine must reach that engine's service only.
+        SecondaryFixtureEngineProvider.OP_LOG.clear();
+        final KNNEngine secondary = KNNEngine.getEngine(SecondaryFixtureEngineProvider.SECONDARY_FIXTURE_ENGINE_NAME);
+        assertEquals(4242L, JNIService.initIndex(10, 4, Map.of(), secondary));
+        assertEquals(List.of("initIndex"), SecondaryFixtureEngineProvider.OP_LOG);
+        assertTrue(fixtureService.opLog().isEmpty());
+
+        JNIService.initIndex(10, 4, Map.of(), fixtureEngine);
+        assertEquals(1, fixtureService.opLog().size());
+        assertEquals(List.of("initIndex"), SecondaryFixtureEngineProvider.OP_LOG);
     }
 
     public void testUnsupportedOperationsAreDeclinedByTheEngineItself() throws Exception {

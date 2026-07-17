@@ -24,6 +24,9 @@ import java.util.Set;
  *       indexes, training and shared index state remain core-only today.</li>
  * </ul>
  *
+ * <p>Registered engines currently inherit core defaults they cannot override: the default engine's maximum
+ * dimension (16,000) and no version restriction.
+ *
  * <p>When no definition is on the classpath (the default build) the registry is empty and the plugin is
  * byte-for-byte upstream.
  */

@@ -180,7 +180,12 @@ public final class KNNEngine implements KNNLibrary {
         if (engine != null) {
             return engine;
         }
-        throw new IllegalArgumentException(String.format("Invalid engine type: %s", name));
+        throw new IllegalArgumentException(
+            String.format(
+                "Invalid engine type: %s. If an engine definition for this name exists, it may have failed to load; check startup warnings.",
+                name
+            )
+        );
     }
 
     /**

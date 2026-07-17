@@ -94,7 +94,18 @@ public final class FixtureNativeEngineService implements NativeEngineService {
         int filterIdsType,
         int[] parentIds
     ) {
-        opLog.add(String.format(Locale.ROOT, "queryIndex(handle=%d, k=%d, methodParameters=%s)", indexPointer, k, methodParameters));
+        opLog.add(
+            String.format(
+                Locale.ROOT,
+                "queryIndex(handle=%d, k=%d, methodParameters=%s, filteredIds=%d, filterIdsType=%d, parentIds=%d)",
+                indexPointer,
+                k,
+                methodParameters,
+                filteredIds == null ? -1 : filteredIds.length,
+                filterIdsType,
+                parentIds == null ? -1 : parentIds.length
+            )
+        );
         final KNNQueryResult[] results = new KNNQueryResult[k];
         for (int i = 0; i < k; i++) {
             results[i] = new KNNQueryResult(i, 1.0f / (1 + i));
