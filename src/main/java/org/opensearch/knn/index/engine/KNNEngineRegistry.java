@@ -6,7 +6,6 @@
 package org.opensearch.knn.index.engine;
 
 import lombok.extern.log4j.Log4j2;
-import org.opensearch.knn.jni.NativeEngineService;
 
 import java.util.Collection;
 import java.util.Collections;
@@ -19,10 +18,8 @@ import java.util.Set;
 
 /**
  * Discovers engines contributed at runtime via {@link java.util.ServiceLoader} of {@link KNNEngineDefinition}.
- * Each discovered definition is fully materialized here into a {@link RegisteredEngine}; a definition that
- * throws is skipped with a warning rather than failing the plugin — one bad experimental jar must not take the
- * node down. {@link KNNEngine} consults {@link #all()} once at class load; the registry is not on the
- * query/index hot path. When nothing is registered (the default build) the registry is empty.
+ * A definition that throws or is misconfigured is skipped with a warning rather than failing the plugin.
+ * Empty in a default build.
  */
 @Log4j2
 final class KNNEngineRegistry {
@@ -44,6 +41,10 @@ final class KNNEngineRegistry {
         for (KNNEngineDefinition definition : ServiceLoader.load(KNNEngineDefinition.class, KNNEngineRegistry.class.getClassLoader())) {
             try {
                 final String name = definition.engineName();
+                if (name == null || name.isBlank()) {
+                    log.warn("KNNEngineDefinition [{}] returned a null or blank engine name; ignoring", definition.getClass().getName());
+                    continue;
+                }
                 final String key = name.toLowerCase(Locale.ROOT);
                 if (BUILT_IN_ENGINE_NAMES.contains(key)) {
                     log.warn(
@@ -63,6 +64,17 @@ final class KNNEngineRegistry {
                     definition.nativeService(),
                     Set.copyOf(definition.engineSpecificQueryParameters())
                 );
+                if (engine.library() == null) {
+                    log.warn("KNNEngineDefinition [{}] returned a null library; ignoring", definition.getClass().getName());
+                    continue;
+                }
+                if (engine.library().createsCustomSegmentFiles() && engine.nativeService() == null) {
+                    log.warn(
+                        "KNNEngineDefinition [{}] creates custom segment files but supplies no NativeEngineService to serve them; ignoring",
+                        definition.getClass().getName()
+                    );
+                    continue;
+                }
                 byName.put(key, engine);
                 queryParameterNames.addAll(engine.queryParameterNames());
             } catch (Exception | LinkageError e) {

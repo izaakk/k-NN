@@ -6,16 +6,10 @@
 import org.opensearch.gradle.test.RestIntegTestTask
 
 /**
- * Experimental sandbox (modeled on the OpenSearch core sandbox; k-NN issue #3283): each tenant is its own
- * subproject (sandbox/<tenant>/), and :sandbox:common carries the shared @ExperimentalAlgorithm API plus
- * the test-only fixture engine. Opt-in only — excluded from the default build graph, bundled only into
- * flagged snapshot builds, never published. Build and test:
- *   ./gradlew -p sandbox check -Pknn.sandbox.enabled=true
- * See sandbox/README.md for the tenant onboarding tutorial and lifecycle.
+ * Experimental sandbox (k-NN issue #3283): one subproject per tenant plus :sandbox:common. Opt-in only,
+ * never published. Build and test: ./gradlew -p sandbox check -Pknn.sandbox.enabled=true. See sandbox/README.md.
  */
 
-// The container project builds nothing (mirroring qa/build.gradle): apply the standard build plugin the
-// root conventions expect, then disable its tasks.
 apply plugin: 'opensearch.build'
 build.enabled = false
 test.enabled = false
@@ -24,8 +18,7 @@ dependenciesInfo.enabled = false
 // Unlike qa/, this container has zero dependencies, so the jarHell runner has no classpath to load from.
 jarHell.enabled = false
 
-// Sandbox artifacts are never published anywhere, not even to Maven local — hard-disable every publishing
-// task on the container and every subproject.
+// Sandbox artifacts are never published anywhere, not even to Maven local — hard-disable publishing tasks.
 def disablePublishing = { Project sandboxProject ->
     sandboxProject.afterEvaluate {
         sandboxProject.tasks.configureEach { task ->
@@ -42,12 +35,9 @@ def disablePublishing = { Project sandboxProject ->
 }
 disablePublishing(project)
 
-// Shared configuration for every sandbox subproject; a tenant's own build.gradle only needs a description
-// and any extra dependencies (see the "Module skeleton" step of sandbox/README.md).
 configure(subprojects.findAll { it.parent.path == project.path }) {
     group = 'org.opensearch.knn.sandbox'
 
-    // Prefix jar names so their origin is obvious in the plugin zip and cannot collide with a dependency.
     base {
         archivesName = "knn-sandbox-${project.name}"
     }
@@ -70,8 +60,6 @@ configure(subprojects.findAll { it.parent.path == project.path }) {
         maven { url = uri("https://plugins.gradle.org/m2/") }
     }
 
-    // No third-party runtime jars of their own and never released; mirror the root project and skip the
-    // license/audit checks that would otherwise require per-dependency metadata.
     dependencyLicenses.enabled = false
     thirdPartyAudit.enabled = false
     loggerUsageCheck.enabled = false
@@ -87,21 +75,16 @@ configure(subprojects.findAll { it.parent.path == project.path }) {
         compileOnly group: 'org.opensearch', name: 'opensearch', version: "${opensearch_version}"
         testImplementation "org.opensearch.test:framework:${opensearch_version}"
 
-        // Compile-time-only view of main-module types (KNNEngineDefinition, NativeEngineService, ...); the
-        // root project never depends on sandbox projects, so a default bundlePlugin has no sandbox classes.
         compileOnly project(':')
         testImplementation project(':')
 
-        // Guava reaches the main plugin at runtime via OpenSearch's transport-grpc module (root declares it
-        // compileOnly); the sandbox test classpath has no such provider, so add it test-only.
+        // Guava is provided at runtime by OpenSearch's transport-grpc module but not on the sandbox test classpath.
         testImplementation "com.google.guava:guava:${versions.guava}"
 
         // REST integration tests extend KNNRestTestCase, published by the root project's test fixtures.
         testImplementation testFixtures(project(':'))
     }
 
-    // Every tenant uses the shared sandbox API from :sandbox:common; both jars ship together in a flagged
-    // build, so the dependency is satisfied at runtime.
     if (project.name != 'common') {
         dependencies {
             implementation project(':sandbox:common')
@@ -110,28 +93,21 @@ configure(subprojects.findAll { it.parent.path == project.path }) {
 
     check.dependsOn spotlessCheck
 
-    // Keep `test` to fast unit tests; REST ITs run under the auto-wired integTest task below.
     test {
         exclude '**/*IT.class'
     }
 
-    // JNI headers generate into build/generated-jni-headers/ at compile time; copy refreshed headers into
-    // jni/sandbox/<tenant>/include/ (checked in so the native build never depends on a Java compile).
     if (rootProject.file("jni/sandbox/${project.name}").exists()) {
         compileJava {
             options.headerOutputDirectory.set(layout.buildDirectory.dir('generated-jni-headers'))
         }
     }
 
-    // Auto-wired REST integration tests: any subproject with *IT sources gets an integTest task against a
-    // sandbox-enabled cluster. Run with: ./gradlew :sandbox:<tenant>:integTest -Pknn.sandbox.enabled=true
+    // Run with: ./gradlew :sandbox:<tenant>:integTest -Pknn.sandbox.enabled=true
     if (fileTree(dir: "${projectDir}/src/test", includes: ['**/*IT.java']).isEmpty() == false) {
         def sandboxTenantCluster = testClusters.create('integTest') {
             testDistribution = "ARCHIVE"
-            // The plugin zip bundles the sandbox jars when built with -Pknn.sandbox.enabled=true.
             plugin(rootProject.tasks.bundlePlugin.archiveFile)
-            // The NODE loads tenant .so files (and the built-in k-NN libs) from the JNI build dir, exactly
-            // as the root project's own integTest cluster does.
             systemProperty("java.library.path", "${rootProject.projectDir}/jni/build/release")
         }
 
@@ -144,10 +120,8 @@ configure(subprojects.findAll { it.parent.path == project.path }) {
             classpath = sourceSets.test.runtimeClasspath
             systemProperty 'tests.security.manager', 'false'
             systemProperty "java.library.path", "${rootProject.projectDir}/jni/build/release"
-            // Point the REST test client at the cluster (the task does not wire this automatically).
             nonInputProperties.systemProperty('tests.rest.cluster', "${-> sandboxTenantCluster.allHttpSocketURI.join(",")}")
             nonInputProperties.systemProperty('tests.clustername', "${-> sandboxTenantCluster.getName()}")
-            // KNNRestTestCase reads these to decide http vs https / credentials.
             systemProperty("https", System.getProperty("https"))
             systemProperty("user", System.getProperty("user"))
             systemProperty("password", System.getProperty("password"))

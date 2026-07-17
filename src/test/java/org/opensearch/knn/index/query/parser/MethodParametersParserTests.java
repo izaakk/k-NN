@@ -126,6 +126,18 @@ public class MethodParametersParserTests extends KNNTestCase {
     }
 
     @SneakyThrows
+    public void testStreamAppendixOnlyParameterRoundTrips() {
+        // an engine-only parameter with no core-known companion still round-trips through the appendix
+        final Map<String, Object> methodParameters = Map.of("engine_only_param", 42);
+        final Function<String, Boolean> allFeatures = name -> true;
+        try (BytesStreamOutput out = new BytesStreamOutput()) {
+            MethodParametersParser.streamOutput(out, methodParameters, allFeatures);
+            final Map<String, ?> read = MethodParametersParser.streamInput(out.bytes().streamInput(), allFeatures);
+            assertEquals(methodParameters, read);
+        }
+    }
+
+    @SneakyThrows
     public void testStreamEngineParameterFailsLoudlyWhenClusterCannotCarryIt() {
         // serialization must fail loudly rather than silently drop the parameter on a cluster lacking the feature
         final Map<String, Object> methodParameters = Map.of("ef_search", 10, "engine_only_param", 42);

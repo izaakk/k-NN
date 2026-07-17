@@ -4,13 +4,7 @@
 #
 # Discovers and configures the native side of every sandbox tenant. Included from jni/CMakeLists.txt only
 # when -DCONFIG_SANDBOX=ON (driven by the Gradle opt-in -Pknn.sandbox.enabled=true); a default build never
-# reaches this file.
-#
-# A tenant with native code adds jni/sandbox/<tenant>/tenant.cmake, which builds its isolated
-# libopensearchknn_<tenant> shared library via the shared helpers in cmake/SandboxTenant.cmake
-# (knn_sandbox_add_jni_library is the library-agnostic extension point: the tenant vendors whatever native
-# library it builds on and hands it over via LINK_LIBRARIES). Tenants without native code simply have no
-# directory here. See sandbox/README.md for the onboarding tutorial.
+# reaches this file. See sandbox/README.md for the onboarding tutorial.
 #
 # CMAKE_CURRENT_SOURCE_DIR here is the jni/ root (include() does not change it).
 set(KNN_SANDBOX_DIR ${CMAKE_CURRENT_SOURCE_DIR}/sandbox)
@@ -26,4 +20,7 @@ foreach(_knn_sandbox_tenant_file ${_knn_sandbox_tenant_files})
     set(KNN_SANDBOX_TENANT_DIR "${_knn_sandbox_tenant_dir}")
     message(STATUS "Sandbox: configuring tenant '${KNN_SANDBOX_TENANT_NAME}'")
     include(${_knn_sandbox_tenant_file})
+    if(NOT TARGET opensearchknn_${KNN_SANDBOX_TENANT_NAME})
+        message(FATAL_ERROR "jni/sandbox/${KNN_SANDBOX_TENANT_NAME}/tenant.cmake must define target opensearchknn_${KNN_SANDBOX_TENANT_NAME}")
+    endif()
 endforeach()

@@ -84,7 +84,6 @@ public class KNNConstants {
     public static final String MINIMAL_MODE_AND_COMPRESSION_FEATURE = "mode_and_compression_feature";
     public static final String TOP_LEVEL_SPACE_TYPE_FEATURE = "top_level_space_type_feature";
     public static final String TOP_LEVEL_ENGINE_FEATURE = "top_level_engine_feature";
-    // Feature key for engine-agnostic node-to-node transport of query method_parameters (see IndexUtil).
     public static final String GENERIC_METHOD_PARAMETERS_FEATURE = "generic_method_parameters_feature";
 
     public static final String RADIAL_SEARCH_KEY = "radial_search";

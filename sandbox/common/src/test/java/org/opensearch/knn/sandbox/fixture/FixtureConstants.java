@@ -6,19 +6,21 @@
 package org.opensearch.knn.sandbox.fixture;
 
 /**
- * Names used by the test-only fixture engine. The fixture lives exclusively in the sandbox test sources —
- * it is never part of any shipped artifact — and exists to exercise the three generic engine extension
- * points (registration, JNIService dispatch, query-parameter deferral) in CI without native code.
+ * Names used by the test-only fixture engine, which exercises the generic engine extension points in CI
+ * without native code.
  */
 public final class FixtureConstants {
 
-    /** Engine name users would type in a mapping; also what {@code KNNEngine.getEngine(name)} resolves. */
+    /** Engine name in mappings and {@code KNNEngine.getEngine(name)}. */
     public static final String FIXTURE_ENGINE_NAME = "sandbox_fixture";
+
+    /** Name of the deliberately broken provider used by registration tests. */
+    public static final String BAD_FIXTURE_ENGINE_NAME = "bad_fixture";
 
     /** The fixture library's sole method. */
     public static final String METHOD_FIXTURE = "fixture_method";
 
-    /** File extension for the fixture's (imaginary) custom segment files. */
+    /** File extension of the fixture's custom segment files. */
     public static final String FIXTURE_EXTENSION = ".fixturebin";
 
     /**

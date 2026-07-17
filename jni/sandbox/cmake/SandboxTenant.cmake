@@ -2,33 +2,22 @@
 # Copyright OpenSearch Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Shared build harness for sandbox tenant JNI libraries. A tenant's jni/sandbox/<tenant>/tenant.cmake calls
-# these helpers to produce a fully isolated libopensearchknn_<tenant> shared library that can coexist in one
-# JVM with the built-in libopensearchknn_faiss — even when both embed different versions of the same vector
-# library. The isolation recipe (hidden visibility + a JNI-only export list + a private static copy of the
-# marshalling helpers + $ORIGIN rpath) is exactly the one validated end-to-end in the PR #3370 work. See sandbox/README.md ("The native path") for the tutorial that walks through using these.
+# Shared build harness for sandbox tenant JNI libraries: hidden visibility, -Wl,--exclude-libs,ALL (the
+# isolation guarantee is Linux-only), a private static copy of the JNI marshalling helpers, and an $ORIGIN
+# rpath keep each libopensearchknn_<tenant> independent of the built-in libraries. See sandbox/README.md.
 
 # ---------------------------------------------------------------------------------------------------------
 # knn_sandbox_add_jni_library(<target>
-#     SOURCES <src>...
-#     [INCLUDE_DIRS <dir>...]
-#     [LINK_LIBRARIES <lib>...]
-#     [DEPENDS <target>...]
+#     SOURCES <src>... [INCLUDE_DIRS <dir>...] [LINK_LIBRARIES <lib>...] [DEPENDS <target>...]
 # )
 #
-# Defines the tenant's SHARED JNI library with the full isolation recipe:
-#   * a private STATIC copy of the generic JNI marshalling helpers (jni/src/jni_util.cpp + commons.cpp) is
-#     compiled in, so the tenant library is runtime-independent of the SHARED opensearchknn_util that the
-#     built-in libraries link;
-#   * hidden symbol visibility plus a linker version script that exports ONLY the JNI entry points
-#     (JNI_OnLoad / JNI_OnUnload / Java_org_opensearch_knn_*). Every other symbol — including the entire
-#     symbol set of any statically embedded vector library — stays local to the tenant .so, so it cannot
-#     interpose with a different version of the same library embedded in libopensearchknn_faiss (an ODR
-#     hazard that could otherwise route calls into the wrong build);
-#   * BUILD_RPATH/INSTALL_RPATH of $ORIGIN, so a tenant that ships a runtime .so alongside its JNI library
-#     resolves it from its own directory;
-#   * the repo-common target properties and registration in TARGET_LIBS, so `cmake --build ... --target
-#     opensearchknn_<tenant>` and the install step behave like the built-in libraries.
+# Defines the tenant's SHARED JNI library with the isolation recipe:
+#   * a private STATIC copy of the JNI marshalling helpers (jni/src/jni_util.cpp + commons.cpp), so the
+#     tenant library is runtime-independent of the SHARED opensearchknn_util the built-in libraries link;
+#   * hidden symbol visibility plus -Wl,--exclude-libs,ALL (Linux), so symbols from statically linked
+#     archives stay local to the tenant .so while its JNI entry points remain exported;
+#   * BUILD_RPATH/INSTALL_RPATH of $ORIGIN, so a tenant-shipped runtime .so resolves from its own directory;
+#   * the repo-common target properties; registered in TARGET_LIBS for consistency with the built-in targets.
 # ---------------------------------------------------------------------------------------------------------
 function(knn_sandbox_add_jni_library target)
     cmake_parse_arguments(TENANT "" "" "SOURCES;INCLUDE_DIRS;LINK_LIBRARIES;DEPENDS" ${ARGN})
@@ -64,8 +53,9 @@ function(knn_sandbox_add_jni_library target)
         BUILD_RPATH "$ORIGIN"
         INSTALL_RPATH "$ORIGIN")
     if(${CMAKE_SYSTEM_NAME} STREQUAL Linux)
-        target_link_options(${target} PRIVATE
-            "-Wl,--version-script=${KNN_SANDBOX_DIR}/cmake/jni_exports.version")
+        # Symbols from statically linked archives (the tenant's vendored vector library) stay local so they
+        # cannot interpose with the built-in libraries; the JNI entry points remain exported via JNIEXPORT.
+        target_link_options(${target} PRIVATE "-Wl,--exclude-libs,ALL")
     endif()
     opensearch_set_common_properties(${target})
     list(APPEND TARGET_LIBS ${target})

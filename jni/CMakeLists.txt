@@ -24,9 +24,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 option(CONFIG_FAISS "Configure faiss library build when this is on")
 option(CONFIG_NMSLIB "Configure nmslib library build when this is on")
 option(CONFIG_TEST "Configure tests when this is on")
-# CONFIG_SANDBOX is deliberately NOT part of the CONFIG_ALL auto-on logic below: experimental sandbox
-# tenants must never be built by a default (unflagged) build. It is enabled only when the Gradle property
-# -Pknn.sandbox.enabled=true passes -DCONFIG_SANDBOX=ON. See jni/sandbox/ and sandbox/README.md.
+# CONFIG_SANDBOX is deliberately NOT part of the CONFIG_ALL auto-on logic below: sandbox tenants are built
+# only when Gradle passes -DCONFIG_SANDBOX=ON (-Pknn.sandbox.enabled=true). See jni/sandbox/ and sandbox/README.md.
 option(CONFIG_SANDBOX "Configure experimental sandbox tenant JNI libraries when this is on" OFF)
 
 if (${CONFIG_FAISS} STREQUAL OFF AND ${CONFIG_NMSLIB} STREQUAL OFF AND ${CONFIG_TEST} STREQUAL OFF)
@@ -132,11 +131,7 @@ endif ()
 
 # ---------------------------------------------------------------------------
 
-# ----------------- Sandbox tenants (experimental, opt-in) ------------------
-# Each sandbox tenant builds a fully isolated JNI library (libopensearchknn_<tenant>), separate from the
-# built-in faiss/nmslib libraries. All tenant-specific native code and build logic lives under
-# jni/sandbox/<tenant>/; the shared harness (the isolation recipe) lives under
-# jni/sandbox/cmake/. See sandbox/README.md for the tenant onboarding tutorial.
+# ------------- Sandbox tenants (experimental, opt-in): see jni/sandbox/ -------------
 if (${CONFIG_SANDBOX} STREQUAL ON)
     include(${CMAKE_CURRENT_SOURCE_DIR}/sandbox/tenants.cmake)
 endif ()

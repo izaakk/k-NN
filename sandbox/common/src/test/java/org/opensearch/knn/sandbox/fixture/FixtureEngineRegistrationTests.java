@@ -12,6 +12,7 @@ import org.opensearch.test.OpenSearchTestCase;
 
 import java.util.Arrays;
 
+import static org.opensearch.knn.sandbox.fixture.FixtureConstants.BAD_FIXTURE_ENGINE_NAME;
 import static org.opensearch.knn.sandbox.fixture.FixtureConstants.FIXTURE_ENGINE_NAME;
 import static org.opensearch.knn.sandbox.fixture.FixtureConstants.FIXTURE_EXTENSION;
 import static org.opensearch.knn.sandbox.fixture.FixtureConstants.METHOD_FIXTURE;
@@ -41,6 +42,14 @@ public class FixtureEngineRegistrationTests extends OpenSearchTestCase {
         assertEquals(1, count);
     }
 
+    public void testValuesListsBuiltInsFirstInDeclarationOrder() {
+        final KNNEngine[] values = KNNEngine.values();
+        assertSame(KNNEngine.NMSLIB, values[0]);
+        assertSame(KNNEngine.FAISS, values[1]);
+        assertSame(KNNEngine.LUCENE, values[2]);
+        assertSame(KNNEngine.UNDEFINED, values[3]);
+    }
+
     public void testFixtureEngineCarriesItsOwnNativeService() {
         final KNNEngine fixture = KNNEngine.getEngine(FIXTURE_ENGINE_NAME);
         assertSame(FixtureNativeEngineService.INSTANCE, fixture.getNativeService());
@@ -59,12 +68,9 @@ public class FixtureEngineRegistrationTests extends OpenSearchTestCase {
 
     public void testCapabilityFlagsFoldIntoEngineBehavior() {
         final KNNEngine fixture = KNNEngine.getEngine(FIXTURE_ENGINE_NAME);
-        // Declared through generic KNNLibrary capability flags, never through engine identity in core.
         assertTrue(fixture.supportsIterativeBuild());
         assertTrue(fixture.createsCustomSegmentFiles());
         assertFalse(fixture.supportsFilters());
-        // Radial and nested capability sets fold registered engines the same way: the fixture declares
-        // neither, so it must appear in neither set — while the built-in membership is unchanged.
         assertFalse(fixture.supportsRadialSearch());
         assertFalse(fixture.supportsNestedFields());
         assertFalse(KNNEngine.ENGINES_SUPPORTING_RADIAL_SEARCH.contains(fixture));
@@ -75,7 +81,7 @@ public class FixtureEngineRegistrationTests extends OpenSearchTestCase {
 
     public void testEngineResolvedFromCustomSegmentFilePath() {
         // createsCustomSegmentFiles() folds the fixture into the custom-segment-file set, which is what
-        // getEngineNameFromPath iterates — so the codec can route the fixture's files to the fixture engine.
+        // getEngineNameFromPath iterates.
         final KNNEngine fixture = KNNEngine.getEngine(FIXTURE_ENGINE_NAME);
         assertSame(fixture, KNNEngine.getEngineNameFromPath("_0_165_target_field" + FIXTURE_EXTENSION));
         assertSame(fixture, KNNEngine.getEngineNameFromPath("_0_165_target_field" + fixture.getCompoundExtension()));
@@ -84,7 +90,7 @@ public class FixtureEngineRegistrationTests extends OpenSearchTestCase {
     public void testBrokenDefinitionIsSkippedWithoutPoisoningRegistration() {
         // BadFixtureEngineProvider (registered alongside the fixture) throws from library(); the registry
         // skips it, so registration survives and every other engine still resolves.
-        expectThrows(IllegalArgumentException.class, () -> KNNEngine.getEngine("bad_fixture"));
+        expectThrows(IllegalArgumentException.class, () -> KNNEngine.getEngine(BAD_FIXTURE_ENGINE_NAME));
         assertNotNull(KNNEngine.getEngine(FIXTURE_ENGINE_NAME));
         assertSame(KNNEngine.FAISS, KNNEngine.getEngine("faiss"));
         assertSame(KNNEngine.LUCENE, KNNEngine.getEngine("lucene"));

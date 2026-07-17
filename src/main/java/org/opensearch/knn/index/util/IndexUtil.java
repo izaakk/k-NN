@@ -73,9 +73,6 @@ public class IndexUtil {
     private static final Version MINIMAL_TOP_LEVEL_ENGINE_FEATURE = Version.V_3_2_0;
     private static final Version MINIMAL_SUPPORTED_VERSION_FOR_NULL_K = Version.V_3_3_0;
     private static final Version MINIMAL_RESCORE_ENABLED_FEATURE = Version.V_3_7_0;
-    // Generic (engine-agnostic) method-parameter transport: when every node is on or after this version, query
-    // method_parameters not known to the core MethodParameter enum (e.g. parameters an engine contributes via
-    // its KNNLibrarySearchContext) are serialized node-to-node generically instead of being dropped.
     private static final Version MINIMAL_GENERIC_METHOD_PARAMETERS_FEATURE = Version.V_3_8_0;
     // public so neural search can access it
     public static final Map<String, Version> minimalRequiredVersionMap = initializeMinimalRequiredVersionMap();

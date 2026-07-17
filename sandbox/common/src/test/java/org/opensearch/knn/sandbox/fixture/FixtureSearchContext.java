@@ -15,9 +15,7 @@ import static org.opensearch.knn.sandbox.fixture.FixtureConstants.METHOD_PARAMET
 
 /**
  * Search context for the fixture engine: declares the engine-specific query parameter
- * {@code fixture_window} (valid iff &gt; 0). This is the engine-side half of the query extension point —
- * the core defers parameters it does not know to this declaration, and the engine-aware validation in
- * {@code KNNQueryBuilder#doToQuery} judges them against it.
+ * {@code fixture_window} (valid iff &gt; 0).
  */
 public final class FixtureSearchContext implements KNNLibrarySearchContext {
 

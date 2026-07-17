@@ -20,9 +20,7 @@ import static org.opensearch.knn.common.KNNConstants.NAME;
 import static org.opensearch.knn.sandbox.fixture.FixtureConstants.METHOD_FIXTURE;
 
 /**
- * The fixture library's single method. Deliberately minimal: L2 only, no training, no encoders — just
- * enough structure for the extension-point tests to resolve a search context and an indexing context
- * through the same call paths a real tenant method would use.
+ * The fixture library's single method. Deliberately minimal: L2 only, no training, no encoders.
  */
 public final class FixtureMethod implements KNNMethod {
 

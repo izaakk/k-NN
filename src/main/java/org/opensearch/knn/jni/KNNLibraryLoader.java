@@ -11,7 +11,9 @@ import org.opensearch.knn.common.KNNConstants;
 
 import java.security.AccessController;
 import java.security.PrivilegedAction;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import static org.opensearch.knn.index.KNNSettings.isFaissAVX2Disabled;
@@ -71,27 +73,47 @@ public class KNNLibraryLoader {
     }
 
     /**
-     * Loads the highest-performance available variant of a JNI library given its base name, selecting
-     * AVX512-SPR, then AVX512, then AVX2, then the plain library — each taken only when the system supports
-     * it and the corresponding {@code knn.faiss.avx*.disabled} setting has not disabled it (those settings
-     * govern SIMD selection for every variant-built library, not just Faiss). Backs the built-in Faiss and
-     * SIMD libraries, and is public so a runtime-registered engine module can load its own native library
-     * through this class (the only place permitted to call {@link System#loadLibrary}); the base name is
-     * supplied by the caller, so no engine-specific name lives here.
+     * Loads a JNI library by base name, trying the highest-performance permitted variant first
+     * ({@code _avx512_spr}, {@code _avx512}, {@code _avx2}, then the plain base name) and falling back to
+     * the next candidate when a variant is not shipped. The suffix scheme mirrors faiss's FAISS_OPT_LEVEL
+     * taxonomy, and shipping variants is optional — a single unsuffixed library is fully supported. This
+     * class is the only one permitted to call {@link System#loadLibrary}.
      *
-     * @param baseLibraryName e.g. {@code opensearchknn_faiss}; variant suffixes ({@code _avx512_spr} etc.) are appended.
+     * @param baseLibraryName e.g. {@code opensearchknn_faiss}
      */
     @ExperimentalApi
     public static void loadLibraryByVariant(String baseLibraryName) {
-        if (!isFaissAVX512SPRDisabled() && isAVX512SPRSupportedBySystem()) {
-            loadLibrary(baseLibraryName + "_avx512_spr");
-        } else if (!isFaissAVX512Disabled() && isAVX512SupportedBySystem()) {
-            loadLibrary(baseLibraryName + "_avx512");
-        } else if (!isFaissAVX2Disabled() && isAVX2SupportedBySystem()) {
-            loadLibrary(baseLibraryName + "_avx2");
-        } else {
-            loadLibrary(baseLibraryName);
+        final List<String> candidates = variantCandidates(baseLibraryName);
+        for (int i = 0; i < candidates.size(); i++) {
+            try {
+                loadLibrary(candidates.get(i));
+                return;
+            } catch (UnsatisfiedLinkError e) {
+                if (i == candidates.size() - 1) {
+                    throw e;
+                }
+                log.info("Library variant unavailable: {}, trying next candidate", candidates.get(i));
+            }
         }
+    }
+
+    /**
+     * Returns the ordered fallback chain of library names for a base name: each SIMD variant the CPU
+     * supports and settings have not disabled (widest first), always ending with the plain base name.
+     */
+    static List<String> variantCandidates(String baseLibraryName) {
+        final List<String> candidates = new ArrayList<>();
+        if (!isFaissAVX512SPRDisabled() && isAVX512SPRSupportedBySystem()) {
+            candidates.add(baseLibraryName + "_avx512_spr");
+        }
+        if (!isFaissAVX512Disabled() && isAVX512SupportedBySystem()) {
+            candidates.add(baseLibraryName + "_avx512");
+        }
+        if (!isFaissAVX2Disabled() && isAVX2SupportedBySystem()) {
+            candidates.add(baseLibraryName + "_avx2");
+        }
+        candidates.add(baseLibraryName);
+        return candidates;
     }
 
     /**

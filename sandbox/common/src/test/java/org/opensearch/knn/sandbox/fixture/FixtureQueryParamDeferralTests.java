@@ -42,21 +42,13 @@ import static org.opensearch.knn.sandbox.fixture.FixtureConstants.METHOD_PARAMET
 /**
  * Exercises the Query-layer extension point end-to-end with a parameter only the engine knows about
  * ({@code fixture_window}, declared through {@code KNNEngineDefinition#engineSpecificQueryParameters} and
- * absent from the core {@code MethodParameter} enum):
- * <ol>
- *   <li>the REST parse layer defers the declared name instead of rejecting it — while a name no registered
- *       engine declared is still rejected at parse exactly as upstream;</li>
- *   <li>the engine-aware validation (the same call {@code KNNQueryBuilder#doToQuery} makes against the
- *       engine's {@code KNNLibrarySearchContext}) is the authority that accepts valid values and rejects
- *       invalid or unknown ones;</li>
- *   <li>the no-method fallback (a model-based index with no serialized method information) rejects the
- *       deferred name rather than silently ignoring it.</li>
- * </ol>
+ * absent from the core {@code MethodParameter} enum): the REST parse layer defers the declared name
+ * (undeclared names are still rejected at parse, exactly as upstream); the engine-aware validation in
+ * {@code KNNQueryBuilder#doToQuery} is the authority on values; and the no-method fallback (a model-based
+ * index with no serialized method information) rejects the deferred name rather than silently ignoring it.
  *
- * <p>The node-to-node wire itself (feature-gated appendix after the unchanged upstream positional block;
- * loud failure instead of a silent drop when a node lacks the feature — the B5 guarantee) is
- * engine-agnostic: it keys on {@code MethodParameter.enumOf}, never the engine registry, so the core
- * {@code MethodParametersParserTests} pin those behaviors without any registered engine.
+ * <p>The node-to-node wire is engine-agnostic — it keys on {@code MethodParameter.enumOf}, never the engine
+ * registry — so the core {@code MethodParametersParserTests} pin its behaviors without a registered engine.
  */
 public class FixtureQueryParamDeferralTests extends OpenSearchTestCase {
 
@@ -106,11 +98,8 @@ public class FixtureQueryParamDeferralTests extends OpenSearchTestCase {
     }
 
     public void testNoMethodContextFallback_rejectsEngineParameterAimedAtModelBasedIndex() throws Exception {
-        // fixture_window passes parse and preliminary validation (the fixture engine declared it), but a
-        // model-based index belongs to a built-in engine (model training has no registered-engine path) and
-        // this one carries no serialized method information, so the engine-aware validation in doToQuery
-        // cannot run. The no-method fallback must reject the engine parameter rather than silently ignore
-        // it — this is the only path on which a declared name can reach the fallback.
+        // fixture_window passes parse (the fixture engine declared it), but a model-based index with no
+        // serialized method information gives doToQuery no method context — the fallback must reject, not ignore.
         final Index dummyIndex = new Index("dummy", "dummy");
         final QueryShardContext mockQueryShardContext = mock(QueryShardContext.class);
         final KNNVectorFieldType mockKNNVectorField = mock(KNNVectorFieldType.class);

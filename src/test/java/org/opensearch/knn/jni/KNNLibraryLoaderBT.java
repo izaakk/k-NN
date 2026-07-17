@@ -20,11 +20,8 @@ import java.lang.reflect.Modifier;
 public class KNNLibraryLoaderBT extends KNNTestCase {
 
     /**
-     * Tests all non-private methods in KNNLibraryLoader by invoking them.
-     *
-     * Verifies that library loading methods can be called without exceptions.
-     * Uses reflection to discover and test all accessible methods, ensuring
-     * comprehensive coverage of the library loading functionality.
+     * Invokes every no-arg non-private loader method; parameterized loaders are covered by their
+     * callers and the direct test below.
      */
     public void testAnnotatedLibraryMethods_whenInvoked_thenLogsResults() {
         Method[] methods = KNNLibraryLoader.class.getDeclaredMethods();
@@ -43,9 +40,7 @@ public class KNNLibraryLoaderBT extends KNNTestCase {
     }
 
     /**
-     * Directly exercises the public variant-selecting loader with a base library name. The Faiss base name
-     * resolves to whichever variant this system supports; loading is idempotent, so this passes whether or
-     * not the no-arg loaders ran first.
+     * Loads a library by base name through the public variant-selecting entry point.
      */
     public void testLoadLibraryByVariant_whenGivenBaseName_thenLoadsSupportedVariant() {
         try {

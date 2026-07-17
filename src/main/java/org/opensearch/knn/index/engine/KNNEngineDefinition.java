@@ -6,36 +6,34 @@
 package org.opensearch.knn.index.engine;
 
 import org.opensearch.common.annotation.ExperimentalApi;
-import org.opensearch.knn.jni.NativeEngineService;
 
 import java.util.Set;
 
 /**
- * Service-provider interface that contributes a complete engine to the core k-NN module at runtime, discovered
- * via {@link java.util.ServiceLoader} (see {@link KNNEngineRegistry}). It is the generic extension point by
- * which a module on the classpath supplies an engine's identity and behavior; the core wires it in as a
- * first-class {@link KNNEngine} (resolved by name) without holding any compile-time reference to that module,
- * and any number of engines can be registered simultaneously.
+ * Service-provider interface contributing a complete engine to the core k-NN module at runtime, discovered via
+ * {@link java.util.ServiceLoader} (see {@link KNNEngineRegistry}) and wired in as a first-class
+ * {@link KNNEngine}, resolved by name, with no compile-time reference to the contributing module.
  *
- * <p>An implementation supplies everything the registered engine needs to behave like a built-in engine:
+ * <p>An implementation supplies:
  * <ul>
- *   <li>{@link #engineName()} — the engine name users type in their mapping; also how
- *       {@code KNNEngine.getEngine(name)} resolves to this engine.</li>
- *   <li>{@link #library()} — the {@link KNNLibrary} driving method resolution, the file extension (so the codec
- *       writes/reads the engine's files), validation, scoring and capability flags.</li>
- *   <li>{@link #nativeService()} — the native index lifecycle; {@code JNIService} routes every operation for the
- *       registered engine here, to the engine's own JNI library, fully separate from the built-in
- *       {@code FaissService}/{@code NmslibService}.</li>
+ *   <li>{@link #engineName()} — the engine name users type in their mapping.</li>
+ *   <li>{@link #library()} — the {@link KNNLibrary} driving method resolution, file extension, validation and
+ *       scoring.</li>
+ *   <li>{@link #nativeService()} — the native index lifecycle: {@code JNIService} routes the eight
+ *       lifecycle/search operations (init/insert/write/template/load/query/radiusQuery/free) here; binary
+ *       indexes, training and shared index state remain core-only today.</li>
  * </ul>
  *
- * <p>Routing is purely by engine: a registered-engine index is created/loaded under this engine and its files
- * carry the engine's extension, so create, load, query and free all dispatch here uniformly — no per-op routing
- * key is needed. When no definition is on the classpath (the default build) the registry is empty and the
- * plugin is byte-for-byte upstream. The core holds no compile-time reference to any specific engine.
+ * <p>When no definition is on the classpath (the default build) the registry is empty and the plugin is
+ * byte-for-byte upstream.
  */
 @ExperimentalApi
 public interface KNNEngineDefinition {
 
+    /**
+     * The engine name users type in their mapping; matched case-insensitively. Must be non-null and non-empty;
+     * a name colliding with a built-in engine or an already-registered definition is skipped with a warning.
+     */
     String engineName();
 
     KNNLibrary library();
@@ -45,8 +43,7 @@ public interface KNNEngineDefinition {
      * create custom segment files (such an engine never reaches {@code JNIService}).
      *
      * <p>Implementations must not touch {@code KNNEngine} statics during construction or from this method:
-     * definitions are consulted while {@code KNNEngine}'s own class initialization builds the engine table,
-     * so doing so creates a class-initialization cycle.
+     * definitions are consulted during {@code KNNEngine}'s own class initialization, so doing so creates an init cycle.
      *
      * @return the engine's {@link NativeEngineService}, or {@code null} for a pure-JVM engine
      */

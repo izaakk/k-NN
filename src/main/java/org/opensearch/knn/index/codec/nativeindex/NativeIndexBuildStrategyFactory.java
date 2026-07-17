@@ -59,8 +59,6 @@ public final class NativeIndexBuildStrategyFactory {
     ) throws IOException {
         final KNNEngine knnEngine = extractKNNEngine(fieldInfo);
         final boolean isTemplate = fieldInfo.attributes().containsKey(MODEL_ID);
-        // Engines whose library builds incrementally (init + insert batches + write) use the iterative path;
-        // others fall back to the one-shot build. Keyed on a generic capability, not on engine identity.
         final boolean iterative = !isTemplate && knnEngine.supportsIterativeBuild();
         final boolean isFaissSQOneBitField = FieldInfoExtractor.isSQField(fieldInfo)
             && FieldInfoExtractor.extractSQConfig(fieldInfo).getBits() == FaissSQEncoder.Bits.ONE.getValue();

@@ -8,7 +8,7 @@ package org.opensearch.knn.sandbox;
 import org.opensearch.knn.index.query.KNNQueryResult;
 import org.opensearch.knn.index.store.IndexInputWithBuffer;
 import org.opensearch.knn.index.store.IndexOutputWithBuffer;
-import org.opensearch.knn.jni.NativeEngineService;
+import org.opensearch.knn.index.engine.NativeEngineService;
 
 import java.util.Locale;
 import java.util.Map;
@@ -16,15 +16,11 @@ import java.util.Map;
 /**
  * Convenience base for a sandbox tenant's {@link NativeEngineService}: every operation throws a
  * descriptive {@link UnsupportedOperationException}, so a tenant overrides only the operations its engine
- * actually supports and inherits honest rejections for the rest. The corresponding capability checks in
- * the core ({@code supportsFilters()}, {@code supportsRadialSearch()}, {@code supportsNestedFields()},
- * template-build gating) normally keep unsupported paths unreachable — these throws are the defensive
- * backstop behind them.
+ * actually supports and inherits honest rejections for the rest.
  *
  * <p>Tenants are not required to extend this class; implementing {@link NativeEngineService} directly is
  * equally valid.
  */
-@ExperimentalAlgorithm(description = "Base NativeEngineService for sandbox tenants", since = "3.8.0")
 public abstract class AbstractNativeEngineService implements NativeEngineService {
 
     /** Engine name used in the exception messages, e.g. {@code "my_engine"}. */

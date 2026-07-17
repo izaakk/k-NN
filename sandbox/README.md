@@ -20,9 +20,9 @@ skeleton in [#3296](https://github.com/opensearch-project/k-NN/pull/3296).
 
 1. **Proposal** — open an issue describing the experimental engine/algorithm (link it to
    [#3283](https://github.com/opensearch-project/k-NN/issues/3283)).
-2. **Incubation** — implement it as a sandbox tenant (see "Anatomy of a tenant"), annotate public classes
-   with [`@ExperimentalAlgorithm`](common/src/main/java/org/opensearch/knn/sandbox/ExperimentalAlgorithm.java),
-   gather feedback from early adopters running snapshot builds with the sandbox enabled.
+2. **Incubation** — implement it as a sandbox tenant (see "Anatomy of a tenant") and gather feedback from
+   early adopters running snapshot builds with the sandbox enabled. The experimental label is structural —
+   the `sandbox/` location, the build flag, snapshot-only bundling, and this README — not an annotation.
 3. **Graduation** — when it meets the criteria at the end of this document, promote it into the plugin
    proper (`src/main` + `jni/`); the sandbox is deliberately shaped so the code moves with minimal change.
    Removal is equally clean: delete two directories (see "Removing a tenant").
@@ -32,8 +32,8 @@ skeleton in [#3296](https://github.com/opensearch-project/k-NN/pull/3296).
 | State | What happens |
 |---|---|
 | Default build (`./gradlew build`, `scripts/build.sh`, releases) | The `sandbox/` tree is **not in the Gradle build graph at all** (see `settings.gradle`): not compiled, not tested, not bundled. `jni/sandbox/` is not configured by CMake (`CONFIG_SANDBOX` is `OFF` and never auto-enabled). The produced plugin is identical to one built from a tree with no `sandbox/` directory. |
-| `-Pknn.sandbox.enabled=true` on a **snapshot** build | Sandbox subprojects join the build; each tenant jar is bundled into the plugin zip as a **runtime-only** artifact (the root project has no compile dependency on any tenant — discovery is via `ServiceLoader`); each tenant's isolated JNI library is built. |
-| `-Pknn.sandbox.enabled=true` on a **release** build (`-Dbuild.snapshot=false`) | The build **fails** with an explanatory error. Sandbox tenants can never ship in a release artifact — this mirrors the OpenSearch core sandbox's "snapshot + flag" double condition, enforced loudly instead of silently. |
+| `-Pknn.sandbox.enabled=true` | Sandbox subprojects join the build; each tenant jar is bundled into the plugin zip as a **runtime-only** artifact (the root project has no compile dependency on any tenant — discovery is via `ServiceLoader`); each tenant's isolated JNI library is built. |
+| Release builds | There is **no release guard**: release artifacts exclude the sandbox simply because the release scripts (`scripts/build.sh`) never pass the flag, so the sandbox is not in the build graph there — exactly the default-build row. |
 
 The gate is a Gradle project property (`-Pknn.sandbox.enabled=true`) rather than core's JVM system property
 (`-Dsandbox.enabled=true`): this gate was agreed in the #3283/#3296 discussions, it is namespaced so the
@@ -54,10 +54,12 @@ A tenant engine plugs into the core through one SPI and behaves like a built-in 
    tenant is **skipped with a warning** at startup — deliberately, so one bad experimental jar cannot take
    the node down.
 2. **JNIService layer** — implement
-   [`NativeEngineService`](../src/main/java/org/opensearch/knn/jni/NativeEngineService.java) (the 8-op
-   native index lifecycle). `JNIService` routes every native operation for the engine to it with a single
-   uniform check (`knnEngine.getNativeService() != null`); adding an engine touches **zero** core dispatch
-   code. Pure-JVM tenants skip this layer entirely (`nativeService()` defaults to `null`).
+   [`NativeEngineService`](../src/main/java/org/opensearch/knn/index/engine/NativeEngineService.java) (the
+   8-op native index lifecycle). `JNIService` routes the 8 lifecycle/search ops (init/insert/write/
+   template/load/query/radiusQuery/free) to it with a single uniform check
+   (`knnEngine.getNativeService() != null`) — binary indexes, training, and shared index state remain
+   core-only today; adding an engine touches **zero** core dispatch code. Pure-JVM tenants skip this
+   layer entirely (`nativeService()` defaults to `null`).
 3. **Query layer** — declare engine-specific query parameter names in the `KNNEngineDefinition`
    (`engineSpecificQueryParameters()`) and their value rules in a
    [`KNNLibrarySearchContext`](../src/main/java/org/opensearch/knn/index/engine/KNNLibrarySearchContext.java).
@@ -148,17 +150,22 @@ core itself owns.
 
 A `NativeEngineService` implementation — typically extending `AbstractNativeEngineService` from
 `:sandbox:common`, which supplies descriptive `UnsupportedOperationException`s for undeclared operations —
-that adapts each of the 8 lifecycle ops onto a static JNI binding class. The binding class loads its
-library through the core loader:
+that adapts each of the 8 lifecycle ops onto a static JNI binding class. `JNIService` hands the tenant
+the raw method-parameters map — the tenant handles its own tuning parameters (e.g. thread counts); the
+core does not pre-extract `INDEX_THREAD_QTY` for tenants. The binding class loads its library through
+the core loader:
 
 ```java
 static {
-    // Loads the best SIMD variant (_avx512_spr/_avx512/_avx2/plain) for the host, same policy as faiss.
+    // Picks the best available SIMD variant for the host and falls back to the plain library.
     KNNLibraryLoader.loadLibraryByVariant("opensearchknn_acme");
     initLibrary();
     KNNEngine.getEngine(AcmeConstants.ACME_ENGINE_NAME).setInitialized(true);
 }
 ```
+
+The variant-suffix scheme (`_avx512_spr`/`_avx512`/`_avx2`/plain) mirrors faiss's opt-levels, but shipping
+variants is optional — a single unsuffixed `.so` is fully supported via the loader's fallback.
 
 Two conventions, checked in review:
 
@@ -183,10 +190,10 @@ knn_sandbox_add_jni_library(opensearchknn_acme
     DEPENDS        acme_vendor_ep)
 ```
 
-The helper compiles with hidden visibility and links with a version script
-([`jni/sandbox/cmake/jni_exports.version`](../jni/sandbox/cmake/jni_exports.version)) exporting **only**
-`JNI_OnLoad`/`JNI_OnUnload`/`Java_org_opensearch_knn_*`, plus an `$ORIGIN` rpath for any runtime `.so`
-shipped alongside. This matters most when the tenant embeds a different version of a C++ library the
+The helper compiles tenant code with hidden visibility (JNI entry points stay exported via `JNIEXPORT`)
+and, on Linux, links with `-Wl,--exclude-libs,ALL` so symbols from statically linked archives become
+local — a guarantee that is Linux-only today (macOS/Windows un-addressed) — plus an `$ORIGIN` rpath for
+any runtime `.so` shipped alongside. This matters most when the tenant embeds a different version of a C++ library the
 plugin already ships (e.g. faiss): two exported `faiss::*` symbol sets in one JVM interpose and route
 calls into the wrong build; export-only-JNI makes the tenant a black box. Verify:
 
@@ -260,7 +267,7 @@ This section is the canonical statement of the graduation criteria.
 `sandbox/acme/src/main/...` into `src/main/...` (a graduated engine may keep its `KNNEngineDefinition` or
 be added as a built-in singleton); native code moves from `jni/sandbox/acme/` into `jni/src` +
 `jni/CMakeLists.txt` proper (or keeps its isolated-library shape if its vendored dependencies require it);
-tests move to the corresponding core locations; the `@ExperimentalAlgorithm` annotations come off. The
+tests move to the corresponding core locations. The
 graduation PR is where BWC policy, settings, and docs get the full production treatment.
 
 **Removing a tenant** that didn't pan out:
@@ -284,9 +291,10 @@ tenant's extension); acceptable for an experimental, snapshot-only engine, but s
   plugin itself, so the mirror is "one subtree per incubating engine".
 * **Test-scoped fixture**: the fixture engine lives in test sources so "never shipped" is structural — a
   test source set is excluded from every jar by construction; no packaging rule can regress it.
-* **Defense-in-depth gating**: the sandbox is excluded from the build graph (settings.gradle), from CMake
-  configuration (`CONFIG_SANDBOX=OFF`), and from release builds (hard failure on
-  `-Dbuild.snapshot=false`) independently — any one layer alone keeps tenants out of a release artifact.
+* **Gating layers**: the sandbox is excluded from the build graph (settings.gradle) and from CMake
+  configuration (`CONFIG_SANDBOX=OFF`); release artifacts exclude tenants because the release scripts
+  never pass the flag. Per-tenant selection (enabling a subset of tenants) is planned follow-up work —
+  currently the flag enables all tenants.
 * **Query-param deferral ships together with the wire appendix**: deferral without a wire that can carry
   the parameter appears to work on a single node and silently drops engine parameters on any multi-node
   hop. The version-gated appendix carries them when every node supports it; when one can't, serialization

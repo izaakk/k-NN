@@ -1,11 +1,7 @@
 name: Sandbox Check
-# Builds, tests and runs precommit checks (including spotless) on the opt-in sandbox tree (sandbox/, see
-# sandbox/README.md), which a default build never compiles. Runs on every PR — not just PRs touching
-# sandbox/** — because the sandbox fixture engine is the CI guard for the generic engine extension points
-# (KNNEngineDefinition registration, JNIService dispatch, query-parameter deferral), and a core refactor
-# can break that seam without touching sandbox files.
-# Mirrors the OpenSearch core sandbox convention of a dedicated flag-enabled workflow. Pure JVM: the fixture
-# engine needs no native build and no test cluster.
+# Runs on every PR — not just PRs touching sandbox/** — because the sandbox fixture engine is the CI guard
+# for the generic engine extension points (KNNEngineDefinition registration, JNIService dispatch,
+# query-parameter deferral), and a core refactor can break that seam without touching sandbox files.
 on:
   push:
     branches:
@@ -34,8 +30,4 @@ jobs:
           distribution: 'temurin'
 
       - name: Run sandbox checks
-        # -p sandbox runs the check task of every sandbox subproject (mirroring core's `check -p sandbox`),
-        # so a new tenant's unit tests AND its spotless/precommit checks (check.dependsOn spotlessCheck in
-        # sandbox/build.gradle) join CI with zero workflow changes. The container project disables
-        # build/test/assemble but keeps check, which is a no-op there (no sources, no dependencies).
         run: ./gradlew -p sandbox check -Pknn.sandbox.enabled=true

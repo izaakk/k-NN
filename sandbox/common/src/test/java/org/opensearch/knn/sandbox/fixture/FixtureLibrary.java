@@ -18,10 +18,7 @@ import static org.opensearch.knn.sandbox.fixture.FixtureConstants.FIXTURE_EXTENS
 import static org.opensearch.knn.sandbox.fixture.FixtureConstants.METHOD_FIXTURE;
 
 /**
- * The {@link org.opensearch.knn.index.engine.KNNLibrary} of the test-only fixture engine. Declares the
- * capability flags the KNNEngine-layer extension point folds into the core capability sets:
- * iterative build (so the build-strategy predicate selects the iterative path) and custom segment files
- * (so {@code KNNEngine.getEngineNameFromPath} resolves {@code .fixturebin} files to this engine).
+ * The {@link org.opensearch.knn.index.engine.KNNLibrary} of the test-only fixture engine.
  */
 public final class FixtureLibrary extends NativeLibrary {
 

@@ -16,7 +16,7 @@ public final class BadFixtureEngineProvider implements KNNEngineDefinition {
 
     @Override
     public String engineName() {
-        return "bad_fixture";
+        return FixtureConstants.BAD_FIXTURE_ENGINE_NAME;
     }
 
     @Override

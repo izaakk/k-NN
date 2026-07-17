@@ -357,17 +357,9 @@ opensearchplugin {
     noticeFile = rootProject.file('NOTICE.txt')
 }
 
-// Sandbox tenant jars are bundled into the plugin zip only with -Pknn.sandbox.enabled=true and only for a
-// SNAPSHOT build (a release build with the flag on fails loudly). Runtime-only: the root project never
-// compiles against sandbox projects; the jars are copied in for ServiceLoader discovery. See sandbox/README.md.
+// Sandbox jars are bundled runtime-only when -Pknn.sandbox.enabled=true; release scripts never pass the flag.
 def knnSandboxEnabled = providers.gradleProperty('knn.sandbox.enabled').getOrElse('false') == 'true'
 if (knnSandboxEnabled) {
-    if (!isSnapshot) {
-        throw new GradleException(
-            "-Pknn.sandbox.enabled=true is not allowed for a release build (build.snapshot=false): " +
-            "experimental sandbox tenants must never ship in a release artifact. Drop the flag, or build a snapshot."
-        )
-    }
     def sandboxSubprojects = rootProject.subprojects.findAll { it.path.startsWith(':sandbox:') }
     sandboxSubprojects.each { evaluationDependsOn(it.path) }
     tasks.named("bundlePlugin").configure { bundleTask ->

@@ -8,7 +8,7 @@ package org.opensearch.knn.sandbox.fixture;
 import org.opensearch.knn.index.query.KNNQueryResult;
 import org.opensearch.knn.index.store.IndexInputWithBuffer;
 import org.opensearch.knn.index.store.IndexOutputWithBuffer;
-import org.opensearch.knn.jni.NativeEngineService;
+import org.opensearch.knn.index.engine.NativeEngineService;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -18,10 +18,10 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Pure-Java, in-memory {@link NativeEngineService} for the fixture engine. There is deliberately no vector
- * math and no off-heap access here: the seam under test is {@code JNIService}'s routing — that every native
- * operation invoked with the fixture engine arrives at THIS service with its arguments intact, and never at
- * the built-in Faiss/Nmslib services. Each call is recorded in an op log the tests assert on.
+ * Pure-Java, in-memory {@link NativeEngineService} for the fixture engine. The seam under test is
+ * {@code JNIService}'s routing — that every native operation invoked with the fixture engine arrives at
+ * THIS service with its arguments intact, and never at the built-in Faiss/Nmslib services. Each call is
+ * recorded in an op log the tests assert on.
  *
  * <p>Operations a minimal tenant would not support (template builds, radial search) throw
  * {@link UnsupportedOperationException} after logging, mirroring how a real tenant declines them — the
@@ -29,10 +29,7 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class FixtureNativeEngineService implements NativeEngineService {
 
-    /**
-     * The single instance handed to the core through {@link FixtureEngineProvider}. The engine table built
-     * by {@code KNNEngine} holds this exact instance, so tests reach the op log through it.
-     */
+    /** The single instance handed to the core through {@link FixtureEngineProvider}; tests reach the op log through it. */
     public static final FixtureNativeEngineService INSTANCE = new FixtureNativeEngineService();
 
     private final List<String> opLog = Collections.synchronizedList(new ArrayList<>());
