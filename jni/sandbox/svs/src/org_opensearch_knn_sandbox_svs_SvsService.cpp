@@ -144,6 +144,36 @@ JNIEXPORT jobjectArray JNICALL Java_org_opensearch_knn_sandbox_svs_SvsService_qu
     return nullptr;
 }
 
+JNIEXPORT jobjectArray JNICALL Java_org_opensearch_knn_sandbox_svs_SvsService_radiusQueryIndex(JNIEnv * env, jclass cls,
+                                                                                               jlong indexPointerJ,
+                                                                                               jfloatArray queryVectorJ,
+                                                                                               jfloat radiusJ,
+                                                                                               jobject methodParamsJ,
+                                                                                               jint maxResultWindowJ)
+{
+    try {
+        return knn_jni::svs_wrapper::RangeSearch(
+            &jniUtil, env, indexPointerJ, queryVectorJ, radiusJ, methodParamsJ, maxResultWindowJ);
+    } catch (...) {
+        jniUtil.CatchCppExceptionAndThrowJava(env);
+    }
+    return nullptr;
+}
+
+JNIEXPORT jobjectArray JNICALL Java_org_opensearch_knn_sandbox_svs_SvsService_radiusQueryIndexWithFilter
+  (JNIEnv * env, jclass cls, jlong indexPointerJ, jfloatArray queryVectorJ, jfloat radiusJ, jobject methodParamsJ,
+   jint maxResultWindowJ, jlongArray filteredIdsJ, jint filterIdsTypeJ) {
+
+    try {
+        return knn_jni::svs_wrapper::RangeSearch_WithFilter(
+            &jniUtil, env, indexPointerJ, queryVectorJ, radiusJ, methodParamsJ, maxResultWindowJ, filteredIdsJ,
+            filterIdsTypeJ);
+    } catch (...) {
+        jniUtil.CatchCppExceptionAndThrowJava(env);
+    }
+    return nullptr;
+}
+
 JNIEXPORT void JNICALL Java_org_opensearch_knn_sandbox_svs_SvsService_free(JNIEnv * env, jclass cls, jlong indexPointerJ)
 {
     try {

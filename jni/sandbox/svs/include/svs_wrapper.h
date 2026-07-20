@@ -45,6 +45,17 @@ namespace knn_jni {
                                            jfloatArray queryVectorJ, jint kJ, jobject methodParamsJ,
                                            jlongArray filterIdsJ, jint filterIdsTypeJ);
 
+        // Radial (range) search: every neighbor within radiusJ (faiss-domain, must be > 0), capped at
+        // maxResultWindowJ; methodParamsJ may carry a search_window_size override.
+        jobjectArray RangeSearch(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env, jlong indexPointerJ,
+                                 jfloatArray queryVectorJ, jfloat radiusJ, jobject methodParamsJ,
+                                 jint maxResultWindowJ);
+
+        // Radial search restricted to filterIdsJ (bitmap or batch encoding, per filterIdsTypeJ).
+        jobjectArray RangeSearch_WithFilter(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env, jlong indexPointerJ,
+                                            jfloatArray queryVectorJ, jfloat radiusJ, jobject methodParamsJ,
+                                            jint maxResultWindowJ, jlongArray filterIdsJ, jint filterIdsTypeJ);
+
         // Free the index at the given address.
         void Free(jlong indexPointerJ);
 

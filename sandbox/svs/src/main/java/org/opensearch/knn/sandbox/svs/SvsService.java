@@ -23,8 +23,8 @@ import java.util.Map;
  * (the {@code KNNEngineDefinition} SPI; the engine is registered by name) — main code never references
  * this class.
  *
- * <p>The native surface is deliberately minimal: build iteratively, write, load, top-k query with an
- * optional pre-filter, and free.
+ * <p>The native surface is deliberately minimal: build iteratively, write, load, top-k and radial query
+ * (both with an optional pre-filter), and free.
  */
 @Log4j2
 public class SvsService {
@@ -66,6 +66,24 @@ public class SvsService {
         float[] queryVector,
         int k,
         Map<String, ?> methodParameters,
+        long[] filterIds,
+        int filterIdsType
+    );
+
+    public static native KNNQueryResult[] radiusQueryIndex(
+        long indexPointer,
+        float[] queryVector,
+        float radius,
+        Map<String, ?> methodParameters,
+        int maxResultWindow
+    );
+
+    public static native KNNQueryResult[] radiusQueryIndexWithFilter(
+        long indexPointer,
+        float[] queryVector,
+        float radius,
+        Map<String, ?> methodParameters,
+        int maxResultWindow,
         long[] filterIds,
         int filterIdsType
     );

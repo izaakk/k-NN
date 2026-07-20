@@ -98,4 +98,12 @@ public class SvsLibrary extends NativeLibrary {
         // SVS supports pre-filtered k-NN search.
         return true;
     }
+
+    @Override
+    public boolean supportsRadialSearch() {
+        // Radial search runs natively through IndexSVSVamana#range_search. The SVS index only accepts a
+        // strictly positive faiss-domain radius, so the inner-product/cosine thresholds that convert to a
+        // non-positive radius are rejected at query time by SvsNativeEngineService.
+        return true;
+    }
 }

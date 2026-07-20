@@ -20,7 +20,7 @@ import java.util.Map;
  * {@link SvsService} (the isolated {@code libopensearchknn_svs}), keeping all native lifecycle behind the
  * generic core SPI so the core {@code JNIService} holds no compile-time reference to SVS.
  *
- * <p>Operations outside the SVS scope (template builds, radial, nested queries) throw
+ * <p>Operations outside the SVS scope (template builds, nested queries) throw
  * {@link UnsupportedOperationException}; the corresponding capability checks in the core already exclude this
  * engine, so these are defensive backstops.
  */
@@ -69,6 +69,46 @@ public class SvsNativeEngineService extends AbstractNativeEngineService {
             return SvsService.queryIndexWithFilter(indexPointer, queryVector, k, methodParameters, filteredIds, filterIdsType);
         }
         return SvsService.queryIndex(indexPointer, queryVector, k, methodParameters);
+    }
+
+    @Override
+    public KNNQueryResult[] radiusQueryIndex(
+        long indexPointer,
+        float[] queryVector,
+        float radius,
+        Map<String, ?> methodParameters,
+        int indexMaxResultWindow,
+        long[] filteredIds,
+        int filterIdsType,
+        int[] parentIds
+    ) {
+        if (ArrayUtils.isNotEmpty(parentIds)) {
+            // Reject rather than silently ignore parentIds, which would return multiple children per parent.
+            throw new UnsupportedOperationException("Nested fields are not supported by the experimental SVS engine");
+        }
+        if (radius <= 0) {
+            // The SVS index only accepts a strictly positive faiss-domain radius. Core converts the
+            // user-facing threshold per space type (Faiss#distanceToRadialThreshold/#scoreToRadialThreshold),
+            // so this rejects e.g. inner-product max_distance >= 0 or cosine min_score <= 0.5.
+            throw new UnsupportedOperationException(
+                "The SVS engine does not support radial thresholds that resolve to a non-positive radius "
+                    + "(converted radius was "
+                    + radius
+                    + "); use a stricter max_distance/min_score for this space type"
+            );
+        }
+        if (ArrayUtils.isNotEmpty(filteredIds)) {
+            return SvsService.radiusQueryIndexWithFilter(
+                indexPointer,
+                queryVector,
+                radius,
+                methodParameters,
+                indexMaxResultWindow,
+                filteredIds,
+                filterIdsType
+            );
+        }
+        return SvsService.radiusQueryIndex(indexPointer, queryVector, radius, methodParameters, indexMaxResultWindow);
     }
 
     @Override

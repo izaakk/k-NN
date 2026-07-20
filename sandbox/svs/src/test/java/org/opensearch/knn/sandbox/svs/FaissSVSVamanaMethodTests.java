@@ -9,6 +9,7 @@ import org.opensearch.Version;
 import org.opensearch.common.ValidationException;
 import org.opensearch.knn.index.SpaceType;
 import org.opensearch.knn.index.VectorDataType;
+import org.opensearch.knn.index.engine.KNNLibraryIndexingContext;
 import org.opensearch.knn.index.engine.KNNMethodConfigContext;
 import org.opensearch.knn.index.engine.MethodComponent;
 import org.opensearch.knn.index.engine.MethodComponentContext;
@@ -18,6 +19,8 @@ import java.util.Map;
 
 import static org.opensearch.knn.common.KNNConstants.ENCODER_FLAT;
 import static org.opensearch.knn.common.KNNConstants.ENCODER_SQ;
+import static org.opensearch.knn.common.KNNConstants.INDEX_DESCRIPTION_PARAMETER;
+import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
 import static org.opensearch.knn.sandbox.svs.SVSConstants.FAISS_SVS_ENCODER_LVQ;
 import static org.opensearch.knn.sandbox.svs.SVSConstants.METHOD_PARAMETER_ALPHA;
 import static org.opensearch.knn.sandbox.svs.SVSConstants.METHOD_PARAMETER_CONSTRUCTION_WINDOW_SIZE;
@@ -104,6 +107,54 @@ public class FaissSVSVamanaMethodTests extends OpenSearchTestCase {
         );
         assertNotNull(
             component.validate(new MethodComponentContext(METHOD_SVS_VAMANA, Map.of(METHOD_PARAMETER_ALPHA, -1.0)), configContext())
+        );
+    }
+
+    private String indexDescriptionFor(MethodComponentContext methodComponentContext) {
+        KNNLibraryIndexingContext indexingContext = FaissSVSVamanaMethod.METHOD_COMPONENT.getKNNLibraryIndexingContext(
+            methodComponentContext,
+            configContext()
+        );
+        return (String) indexingContext.getLibraryParameters().get(INDEX_DESCRIPTION_PARAMETER);
+    }
+
+    /**
+     * The index description is the contract with the native faiss factory; pin its exact assembly. The
+     * default (flat) encoder's trailing ",Flat" token must be dropped — SVS's factory rejects it.
+     */
+    public void testIndexDescription_whenDefaultFlatEncoder_thenTrailingFlatDropped() {
+        assertEquals(
+            "SVSVamana64",
+            indexDescriptionFor(new MethodComponentContext(METHOD_SVS_VAMANA, Map.of(METHOD_PARAMETER_DEGREE, 64)))
+        );
+    }
+
+    public void testIndexDescription_whenLvqEncoder_thenBitsSuffixed() {
+        MethodComponentContext lvq = new MethodComponentContext(
+            FAISS_SVS_ENCODER_LVQ,
+            Map.of(METHOD_PARAMETER_LVQ_PRIMARY_BITS, 4, METHOD_PARAMETER_LVQ_RESIDUAL_BITS, 4)
+        );
+        try {
+            assertEquals(
+                "SVSVamana64,LVQ4x4",
+                indexDescriptionFor(
+                    new MethodComponentContext(METHOD_SVS_VAMANA, Map.of(METHOD_PARAMETER_DEGREE, 64, METHOD_ENCODER_PARAMETER, lvq))
+                )
+            );
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            // The LVQ generator runs the encoder's platform check, which needs the SVS native library; in a
+            // pure-JVM unit run there is none to load. The LVQ description is asserted end-to-end by the IT.
+            org.junit.Assume.assumeNoException("LVQ platform check needs the SVS native library", e);
+        }
+    }
+
+    public void testIndexDescription_whenSqFp16Encoder_thenFp16Token() {
+        MethodComponentContext sq = new MethodComponentContext(ENCODER_SQ, Map.of(SVSConstants.FAISS_SVS_SQ_TYPE, "fp16"));
+        assertEquals(
+            "SVSVamana64,FP16",
+            indexDescriptionFor(
+                new MethodComponentContext(METHOD_SVS_VAMANA, Map.of(METHOD_PARAMETER_DEGREE, 64, METHOD_ENCODER_PARAMETER, sq))
+            )
         );
     }
 }

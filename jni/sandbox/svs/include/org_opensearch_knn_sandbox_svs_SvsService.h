@@ -77,6 +77,22 @@ JNIEXPORT jobjectArray JNICALL Java_org_opensearch_knn_sandbox_svs_SvsService_qu
 
 /*
  * Class:     org_opensearch_knn_sandbox_svs_SvsService
+ * Method:    radiusQueryIndex
+ * Signature: (J[FFLjava/util/Map;I)[Lorg/opensearch/knn/index/query/KNNQueryResult;
+ */
+JNIEXPORT jobjectArray JNICALL Java_org_opensearch_knn_sandbox_svs_SvsService_radiusQueryIndex
+  (JNIEnv *, jclass, jlong, jfloatArray, jfloat, jobject, jint);
+
+/*
+ * Class:     org_opensearch_knn_sandbox_svs_SvsService
+ * Method:    radiusQueryIndexWithFilter
+ * Signature: (J[FFLjava/util/Map;I[JI)[Lorg/opensearch/knn/index/query/KNNQueryResult;
+ */
+JNIEXPORT jobjectArray JNICALL Java_org_opensearch_knn_sandbox_svs_SvsService_radiusQueryIndexWithFilter
+  (JNIEnv *, jclass, jlong, jfloatArray, jfloat, jobject, jint, jlongArray, jint);
+
+/*
+ * Class:     org_opensearch_knn_sandbox_svs_SvsService
  * Method:    free
  * Signature: (J)V
  */

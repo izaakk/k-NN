@@ -73,7 +73,8 @@ endif()
 if(NOT EXISTS "${SVS_RUNTIME_PREFIX}/lib/cmake/svs_runtime")
     message(FATAL_ERROR
         "SVS runtime package at '${SVS_RUNTIME_PREFIX}' is missing lib/cmake/svs_runtime. "
-        "Provide -Psvs.prefix=<dir> (a libsvs-runtime 0.3.0 prefix) or -Psvs.url=<artifact>.")
+        "Provide -DSVS_RUNTIME_PREFIX=<dir> (a libsvs-runtime 0.3.0 prefix) or -DSVS_RUNTIME_URL=<artifact> "
+        "plus -DSVS_RUNTIME_SHA256=<hex>, passed through gradle via -Psandbox.cmake.args.")
 endif()
 
 list(PREPEND CMAKE_PREFIX_PATH "${SVS_RUNTIME_PREFIX}")

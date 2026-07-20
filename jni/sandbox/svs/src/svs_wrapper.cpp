@@ -11,9 +11,10 @@
 
 /*
  * Native implementation for the isolated SVS engine (libopensearchknn_svs). Deliberately minimal and
- * self-contained: it only knows how to build, write, load, query (top-k, optionally pre-filtered) and free
- * an SVS Vamana index, using nothing beyond unmodified upstream faiss APIs (index_factory, IndexIDMap,
- * read_index/write_index, IDSelector) plus the SVS surface (IndexSVSVamana, SearchParametersSVSVamana).
+ * self-contained: it only knows how to build, write, load, query (top-k and radial, optionally pre-filtered)
+ * and free an SVS Vamana index, using nothing beyond unmodified upstream faiss APIs (index_factory,
+ * IndexIDMap, read_index/write_index, IDSelector) plus the SVS surface (IndexSVSVamana,
+ * SearchParametersSVSVamana).
  * It shares no translation units with the main faiss JNI library other than the generic JNI marshalling
  * helpers (jni_util/commons), which are faiss-free.
  */
@@ -77,6 +78,23 @@ struct IDSelectorJlongBitmap : IDSelector {
 
 namespace {
 
+// Translates inner (sequential) index ids to the external doc ids in IndexIDMap#id_map before consulting
+// the wrapped selector, which tests external ids. Mirror of faiss::IDSelectorTranslated, kept local so the
+// radial path can call the inner IndexSVSVamana directly (see RangeSearch_WithFilter for why).
+struct IDSelectorSvsTranslated : faiss::IDSelector {
+    const std::vector<faiss::idx_t>& id_map;
+    const faiss::IDSelector* sel;
+
+    IDSelectorSvsTranslated(const std::vector<faiss::idx_t>& _id_map, const faiss::IDSelector* _sel)
+      : id_map(_id_map),
+        sel(_sel) {
+    }
+
+    bool is_member(faiss::idx_t id) const final {
+        return sel->is_member(id_map[id]);
+    }
+};
+
 // Extracts the IndexSVSVamana out of the IndexIDMap wrapper, throwing if the index is anything else.
 // This library only ever serves .svs files containing SVS Vamana indices.
 faiss::IndexSVSVamana* extractSVSVamana(faiss::IndexIDMap* idMap) {
@@ -111,22 +129,23 @@ void applySVSVamanaParameters(knn_jni::JNIUtilInterface * jniUtil, JNIEnv *env,
         svsIndex->search_buffer_capacity = svsIndex->search_window_size;
     }
     // Only override alpha when present: unset keeps the SVS metric-dependent default (1.2 L2, 0.95 IP).
-    // java/lang/Double is not in JNIUtil's cached-class set, so resolve it through the raw JNI env.
+    // The mapping layer's DoubleParameter guarantees a java/lang/Double here (non-Double values are rejected
+    // at mapping validation); java/lang/Double is not in JNIUtil's cached-class set, so resolve it through
+    // the raw JNI env.
     if ((value = parametersCpp.find(knn_jni::ALPHA)) != parametersCpp.end()) {
         jclass doubleClass = env->FindClass("java/lang/Double");
         jniUtil->HasExceptionInStack(env, "Could not find class java/lang/Double");
-        if (doubleClass != nullptr && env->IsInstanceOf(value->second, doubleClass)) {
-            jmethodID doubleValue = env->GetMethodID(doubleClass, "doubleValue", "()D");
-            jniUtil->HasExceptionInStack(env, "Could not find method doubleValue on java/lang/Double");
-            svsIndex->alpha = static_cast<float>(env->CallDoubleMethod(value->second, doubleValue));
-            jniUtil->HasExceptionInStack(env, "Could not call \"doubleValue\" method on Double");
-        } else {
-            // Fall back for integral JSON values (e.g. alpha: 2); Integer IS in the cached set.
-            svsIndex->alpha = static_cast<float>(jniUtil->ConvertJavaObjectToCppInteger(env, value->second));
+        if (doubleClass == nullptr || !env->IsInstanceOf(value->second, doubleClass)) {
+            if (doubleClass != nullptr) {
+                env->DeleteLocalRef(doubleClass);
+            }
+            throw std::runtime_error("alpha must be a floating-point value");
         }
-        if (doubleClass != nullptr) {
-            env->DeleteLocalRef(doubleClass);
-        }
+        jmethodID doubleValue = env->GetMethodID(doubleClass, "doubleValue", "()D");
+        jniUtil->HasExceptionInStack(env, "Could not find method doubleValue on java/lang/Double");
+        svsIndex->alpha = static_cast<float>(env->CallDoubleMethod(value->second, doubleValue));
+        jniUtil->HasExceptionInStack(env, "Could not call \"doubleValue\" method on Double");
+        env->DeleteLocalRef(doubleClass);
     }
 }
 
@@ -355,6 +374,100 @@ jobjectArray knn_jni::svs_wrapper::QueryIndex_WithFilter(knn_jni::JNIUtilInterfa
     jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
 
     return buildQueryResults(jniUtil, env, ids, dis, k);
+}
+
+jobjectArray knn_jni::svs_wrapper::RangeSearch(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env, jlong indexPointerJ,
+                                               jfloatArray queryVectorJ, jfloat radiusJ, jobject methodParamsJ,
+                                               jint maxResultWindowJ) {
+    return RangeSearch_WithFilter(jniUtil, env, indexPointerJ, queryVectorJ, radiusJ, methodParamsJ,
+                                  maxResultWindowJ, nullptr, 0);
+}
+
+jobjectArray knn_jni::svs_wrapper::RangeSearch_WithFilter(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env,
+                                                          jlong indexPointerJ, jfloatArray queryVectorJ,
+                                                          jfloat radiusJ, jobject methodParamsJ,
+                                                          jint maxResultWindowJ, jlongArray filterIdsJ,
+                                                          jint filterIdsTypeJ) {
+    if (queryVectorJ == nullptr) {
+        throw std::runtime_error("Query Vector cannot be null");
+    }
+    // The Java layer rejects non-positive radii with a space-type-specific message; this backstop keeps the
+    // native boundary honest (IndexSVSVamana::range_search throws on radius <= 0 anyway, less descriptively).
+    if (radiusJ <= 0) {
+        throw std::runtime_error("SVS radial search requires a strictly positive radius");
+    }
+
+    auto *indexReader = reinterpret_cast<faiss::IndexIDMap *>(indexPointerJ);
+    auto *svsVamanaReader = extractSVSVamana(indexReader);
+
+    std::unordered_map<std::string, jobject> methodParams;
+    if (methodParamsJ != nullptr) {
+        methodParams = jniUtil->ConvertJavaMapToCppMap(env, methodParamsJ);
+    }
+
+    faiss::SearchParametersSVSVamana svsVamanaParams;
+    svsVamanaParams.search_window_size = knn_jni::commons::getIntegerMethodParameter(
+        env, jniUtil, methodParams, knn_jni::SEARCH_WINDOW_SIZE, svsVamanaReader->search_window_size);
+    svsVamanaParams.search_buffer_capacity = std::max(
+        static_cast<size_t>(svsVamanaReader->search_buffer_capacity), svsVamanaParams.search_window_size);
+
+    // The IndexIDMap range_search forwarder rebuilds a PLAIN faiss::SearchParameters around its translated
+    // selector, silently dropping the SVS window/capacity fields above. So the radial path calls the inner
+    // IndexSVSVamana directly: the Java-side filter (external doc ids) is wrapped in a selector translating
+    // the inner sequential ids through id_map, and result labels are translated back the same way below.
+    faiss::RangeSearchResult res(1, true);
+    float* rawQueryVector = jniUtil->GetFloatArrayElements(env, queryVectorJ, nullptr);
+
+    // Set omp threads to 1 so no new OMP threads are created under the search threadpool.
+    omp_set_num_threads(1);
+
+    if (filterIdsJ != nullptr) {
+        jlong *filteredIdsArray = jniUtil->GetLongArrayElements(env, filterIdsJ, nullptr);
+        int filterIdsLength = jniUtil->GetJavaLongArrayLength(env, filterIdsJ);
+        std::unique_ptr<faiss::IDSelector> idSelector;
+        if (filterIdsTypeJ == BITMAP) {
+            idSelector.reset(new faiss::IDSelectorJlongBitmap(filterIdsLength, filteredIdsArray));
+        } else {
+            faiss::idx_t* batchIndices = reinterpret_cast<faiss::idx_t*>(filteredIdsArray);
+            idSelector.reset(new faiss::IDSelectorBatch(filterIdsLength, batchIndices));
+        }
+        IDSelectorSvsTranslated translatedSelector(indexReader->id_map, idSelector.get());
+        svsVamanaParams.sel = &translatedSelector;
+        try {
+            svsVamanaReader->range_search(1, rawQueryVector, radiusJ, &res, &svsVamanaParams);
+        } catch (...) {
+            jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
+            jniUtil->ReleaseLongArrayElements(env, filterIdsJ, filteredIdsArray, JNI_ABORT);
+            throw;
+        }
+        jniUtil->ReleaseLongArrayElements(env, filterIdsJ, filteredIdsArray, JNI_ABORT);
+    } else {
+        try {
+            svsVamanaReader->range_search(1, rawQueryVector, radiusJ, &res, &svsVamanaParams);
+        } catch (...) {
+            jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
+            throw;
+        }
+    }
+    jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
+
+    // res.lims[1] is the number of matches for the single query. Cap at the index max result window; the
+    // Java collector re-collects into its own top window, so no native-side sort is needed (same as faiss).
+    int resultSize = static_cast<int>(std::min<size_t>(res.lims[1], static_cast<size_t>(maxResultWindowJ)));
+
+    jclass resultClass = jniUtil->FindClass(env, "org/opensearch/knn/index/query/KNNQueryResult");
+    jmethodID allArgs = jniUtil->FindMethod(env, "org/opensearch/knn/index/query/KNNQueryResult", "<init>");
+
+    jobjectArray results = jniUtil->NewObjectArray(env, resultSize, resultClass, nullptr);
+    for (int i = 0; i < resultSize; ++i) {
+        // Labels come from the inner index (sequential ids); translate to external doc ids via id_map,
+        // exactly as IndexIDMap::range_search would have.
+        faiss::idx_t label = indexReader->id_map[res.labels[i]];
+        jobject result = jniUtil->NewObject(env, resultClass, allArgs, label, res.distances[i]);
+        jniUtil->SetObjectArrayElement(env, results, i, result);
+        env->DeleteLocalRef(result);
+    }
+    return results;
 }
 
 void knn_jni::svs_wrapper::Free(jlong indexPointerJ) {
