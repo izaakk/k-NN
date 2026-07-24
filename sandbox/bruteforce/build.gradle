@@ -1,0 +1,10 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// Everything else — plugins, repositories, the common dependency set and unit-test conventions — is
+// inherited from the shared sandbox configuration in sandbox/build.gradle. This tenant is pure JVM:
+// no jni/sandbox/bruteforce directory exists, so the native harness has nothing to discover.
+description = "Example brute-force engine for the k-NN sandbox: an exact scan over vectors implemented " +
+    "entirely on-heap in Java, exercising every extension-point seam without a native library"
