@@ -59,7 +59,18 @@ public class SvsService {
 
     public static native long loadIndexWithStream(IndexInputWithBuffer readStream);
 
-    public static native KNNQueryResult[] queryIndex(long indexPointer, float[] queryVector, int k, Map<String, ?> methodParameters);
+    /**
+     * Top-k query. A non-null, non-empty {@code parentIds} (the sorted parent doc ids derived from the
+     * parent {@code BitSet}) makes this a nested query: one best child per parent, {@code k} counting
+     * distinct parents.
+     */
+    public static native KNNQueryResult[] queryIndex(
+        long indexPointer,
+        float[] queryVector,
+        int k,
+        Map<String, ?> methodParameters,
+        int[] parentIds
+    );
 
     public static native KNNQueryResult[] queryIndexWithFilter(
         long indexPointer,
@@ -67,7 +78,8 @@ public class SvsService {
         int k,
         Map<String, ?> methodParameters,
         long[] filterIds,
-        int filterIdsType
+        int filterIdsType,
+        int[] parentIds
     );
 
     public static native KNNQueryResult[] radiusQueryIndex(
@@ -75,7 +87,8 @@ public class SvsService {
         float[] queryVector,
         float radius,
         Map<String, ?> methodParameters,
-        int maxResultWindow
+        int maxResultWindow,
+        int[] parentIds
     );
 
     public static native KNNQueryResult[] radiusQueryIndexWithFilter(
@@ -85,7 +98,8 @@ public class SvsService {
         Map<String, ?> methodParameters,
         int maxResultWindow,
         long[] filterIds,
-        int filterIdsType
+        int filterIdsType,
+        int[] parentIds
     );
 
     public static native void free(long indexPointer);

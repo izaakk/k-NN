@@ -23,9 +23,15 @@ documents tenant-specific behavior a user or reviewer needs to know.
     check should be capability-driven). Workaround until then: set the index setting
     `index.knn.advanced.filtered_exact_search_threshold: 0` to keep filtered radial on the native ANN
     path.
-- **Nested fields are not supported** and are rejected at query time: per-parent grouping must happen
-  inside the SVS runtime's graph traversal to guarantee k distinct parents, and the prebuilt
-  `libsvs_runtime` search API does not expose a grouping construct yet (feature request filed upstream).
+- **Nested (multi-vector) fields are supported** through the SVS runtime's `IDGrouper`: the native layer
+  passes a one-best-per-parent grouper to `VamanaIndex#search`/`#range_search`, so `k` counts distinct
+  parents with the same guarantee the patched-faiss engines provide (exact grouping during graph search,
+  not an oversampled post-grouping emulation). Requires a `libsvs-runtime` build that carries the
+  `IDGrouper` API (see the upstream feature request); the grouped search does not use the runtime's
+  filtered-search early-exit heuristics, so highly-restrictive nested+filter queries scan until k parents
+  are found or the segment's graph is exhausted.
+  - Nested **radial** search is wired the same way (best in-radius child per parent). Filtered nested
+    radial is subject to the same core exact-search fallback gate as plain filtered radial (below).
 
 ## Platform notes
 

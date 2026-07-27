@@ -62,34 +62,34 @@ JNIEXPORT jlong JNICALL Java_org_opensearch_knn_sandbox_svs_SvsService_loadIndex
 /*
  * Class:     org_opensearch_knn_sandbox_svs_SvsService
  * Method:    queryIndex
- * Signature: (J[FILjava/util/Map;)[Lorg/opensearch/knn/index/query/KNNQueryResult;
+ * Signature: (J[FILjava/util/Map;[I)[Lorg/opensearch/knn/index/query/KNNQueryResult;
  */
 JNIEXPORT jobjectArray JNICALL Java_org_opensearch_knn_sandbox_svs_SvsService_queryIndex
-  (JNIEnv *, jclass, jlong, jfloatArray, jint, jobject);
+  (JNIEnv *, jclass, jlong, jfloatArray, jint, jobject, jintArray);
 
 /*
  * Class:     org_opensearch_knn_sandbox_svs_SvsService
  * Method:    queryIndexWithFilter
- * Signature: (J[FILjava/util/Map;[JI)[Lorg/opensearch/knn/index/query/KNNQueryResult;
+ * Signature: (J[FILjava/util/Map;[JI[I)[Lorg/opensearch/knn/index/query/KNNQueryResult;
  */
 JNIEXPORT jobjectArray JNICALL Java_org_opensearch_knn_sandbox_svs_SvsService_queryIndexWithFilter
-  (JNIEnv *, jclass, jlong, jfloatArray, jint, jobject, jlongArray, jint);
+  (JNIEnv *, jclass, jlong, jfloatArray, jint, jobject, jlongArray, jint, jintArray);
 
 /*
  * Class:     org_opensearch_knn_sandbox_svs_SvsService
  * Method:    radiusQueryIndex
- * Signature: (J[FFLjava/util/Map;I)[Lorg/opensearch/knn/index/query/KNNQueryResult;
+ * Signature: (J[FFLjava/util/Map;I[I)[Lorg/opensearch/knn/index/query/KNNQueryResult;
  */
 JNIEXPORT jobjectArray JNICALL Java_org_opensearch_knn_sandbox_svs_SvsService_radiusQueryIndex
-  (JNIEnv *, jclass, jlong, jfloatArray, jfloat, jobject, jint);
+  (JNIEnv *, jclass, jlong, jfloatArray, jfloat, jobject, jint, jintArray);
 
 /*
  * Class:     org_opensearch_knn_sandbox_svs_SvsService
  * Method:    radiusQueryIndexWithFilter
- * Signature: (J[FFLjava/util/Map;I[JI)[Lorg/opensearch/knn/index/query/KNNQueryResult;
+ * Signature: (J[FFLjava/util/Map;I[JI[I)[Lorg/opensearch/knn/index/query/KNNQueryResult;
  */
 JNIEXPORT jobjectArray JNICALL Java_org_opensearch_knn_sandbox_svs_SvsService_radiusQueryIndexWithFilter
-  (JNIEnv *, jclass, jlong, jfloatArray, jfloat, jobject, jint, jlongArray, jint);
+  (JNIEnv *, jclass, jlong, jfloatArray, jfloat, jobject, jint, jlongArray, jint, jintArray);
 
 /*
  * Class:     org_opensearch_knn_sandbox_svs_SvsService

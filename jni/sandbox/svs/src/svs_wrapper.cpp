@@ -31,6 +31,7 @@
 #include "faiss/impl/IDSelector.h"
 #include "faiss/index_factory.h"
 #include "faiss/index_io.h"
+#include "faiss/svs/IndexSVSFaissUtils.h"
 #include "faiss/svs/IndexSVSVamana.h"
 
 #include <omp.h>
@@ -93,6 +94,44 @@ struct IDSelectorSvsTranslated : faiss::IDSelector {
     bool is_member(faiss::idx_t id) const final {
         return sel->is_member(id_map[id]);
     }
+};
+
+// Bridges a faiss IDSelector to the SVS runtime IDFilter interface so tenant code can call the runtime
+// search entry points directly (needed below because SearchParametersSVSVamana carries no grouper).
+struct SvsRuntimeSelectorFilter final : svs_runtime::IDFilter {
+    explicit SvsRuntimeSelectorFilter(const faiss::IDSelector& sel)
+      : selector(sel) {
+    }
+
+    bool is_member(size_t id) const override {
+        return selector.is_member(static_cast<faiss::idx_t>(id));
+    }
+
+    const faiss::IDSelector& selector;
+};
+
+// One-best-per-parent grouper for nested (multi-vector) search. Inner (sequential) index ids are
+// translated to external doc ids through IndexIDMap#id_map; the group of a child doc is the first parent
+// doc id at or above it (children occupy consecutive doc ids directly below their parent, which holds no
+// vector). Same relation as faiss's IDGrouperBitmap; parent_ids is the sorted array from the Java BitSet.
+struct SvsParentIdGrouper final : svs_runtime::IDGrouper {
+    SvsParentIdGrouper(const std::vector<faiss::idx_t>& idMap, std::vector<int64_t> parents)
+      : id_map(idMap),
+        parent_ids(std::move(parents)) {
+    }
+
+    size_t get_group(size_t id) const override {
+        const int64_t externalId = static_cast<int64_t>(id_map[id]);
+        auto it = std::lower_bound(parent_ids.begin(), parent_ids.end(), externalId);
+        if (it == parent_ids.end()) {
+            // No parent at or above this doc id: not a nested child, count it as its own group.
+            return NO_GROUP;
+        }
+        return static_cast<size_t>(*it);
+    }
+
+    const std::vector<faiss::idx_t>& id_map;
+    std::vector<int64_t> parent_ids;  // sorted ascending
 };
 
 // Extracts the IndexSVSVamana out of the IndexIDMap wrapper, throwing if the index is anything else.
@@ -299,14 +338,16 @@ jlong knn_jni::svs_wrapper::LoadIndexWithStream(faiss::IOReader* ioReader) {
 }
 
 jobjectArray knn_jni::svs_wrapper::QueryIndex(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env, jlong indexPointerJ,
-                                              jfloatArray queryVectorJ, jint kJ, jobject methodParamsJ) {
-    return QueryIndex_WithFilter(jniUtil, env, indexPointerJ, queryVectorJ, kJ, methodParamsJ, nullptr, 0);
+                                              jfloatArray queryVectorJ, jint kJ, jobject methodParamsJ,
+                                              jintArray parentIdsJ) {
+    return QueryIndex_WithFilter(jniUtil, env, indexPointerJ, queryVectorJ, kJ, methodParamsJ, nullptr, 0,
+                                 parentIdsJ);
 }
 
 jobjectArray knn_jni::svs_wrapper::QueryIndex_WithFilter(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env,
                                                          jlong indexPointerJ, jfloatArray queryVectorJ, jint kJ,
                                                          jobject methodParamsJ, jlongArray filterIdsJ,
-                                                         jint filterIdsTypeJ) {
+                                                         jint filterIdsTypeJ, jintArray parentIdsJ) {
     if (queryVectorJ == nullptr) {
         throw std::runtime_error("Query Vector cannot be null");
     }
@@ -344,6 +385,60 @@ jobjectArray knn_jni::svs_wrapper::QueryIndex_WithFilter(knn_jni::JNIUtilInterfa
     // Set omp threads to 1 so no new OMP threads are created under the search threadpool.
     omp_set_num_threads(1);
 
+    if (parentIdsJ != nullptr) {
+        // Nested (multi-vector) search: one best child per parent, k counting distinct parents. The
+        // vendored faiss SearchParametersSVSVamana carries no grouper, so this path makes the same runtime
+        // call IndexSVSVamana::search makes, passing the grouper (and the pre-filter, translated to inner
+        // ids) through the runtime API.
+        try {
+            auto parentIdsCpp = jniUtil->ConvertJavaIntArrayToCppIntVector(env, parentIdsJ);
+            std::sort(parentIdsCpp.begin(), parentIdsCpp.end());
+            SvsParentIdGrouper grouper{indexReader->id_map, std::move(parentIdsCpp)};
+
+            svs_runtime::VamanaIndex::SearchParams runtimeParams{
+                svsVamanaParams.search_window_size, svsVamanaParams.search_buffer_capacity};
+
+            // The runtime pads missing results with SIZE_MAX / +inf; SIZE_MAX becomes the faiss -1
+            // sentinel on translation below, which buildQueryResults already trims.
+            std::vector<size_t> innerIds(k, std::numeric_limits<size_t>::max());
+
+            svs_runtime::Status status;
+            if (filterIdsJ != nullptr) {
+                jlong *filteredIdsArray = jniUtil->GetLongArrayElements(env, filterIdsJ, nullptr);
+                int filterIdsLength = jniUtil->GetJavaLongArrayLength(env, filterIdsJ);
+                std::unique_ptr<faiss::IDSelector> idSelector;
+                if (filterIdsTypeJ == BITMAP) {
+                    idSelector.reset(new faiss::IDSelectorJlongBitmap(filterIdsLength, filteredIdsArray));
+                } else {
+                    faiss::idx_t* batchIndices = reinterpret_cast<faiss::idx_t*>(filteredIdsArray);
+                    idSelector.reset(new faiss::IDSelectorBatch(filterIdsLength, batchIndices));
+                }
+                IDSelectorSvsTranslated translatedSelector(indexReader->id_map, idSelector.get());
+                SvsRuntimeSelectorFilter runtimeFilter{translatedSelector};
+                status = svsVamanaReader->impl->search(
+                    1, rawQueryVector, k, dis.data(), innerIds.data(), &runtimeParams, &runtimeFilter, &grouper);
+                jniUtil->ReleaseLongArrayElements(env, filterIdsJ, filteredIdsArray, JNI_ABORT);
+            } else {
+                status = svsVamanaReader->impl->search(
+                    1, rawQueryVector, k, dis.data(), innerIds.data(), &runtimeParams, nullptr, &grouper);
+            }
+            if (!status.ok()) {
+                throw std::runtime_error(std::string("SVS nested search failed: ") + status.message());
+            }
+            // Translate inner (sequential) labels to external doc ids, exactly as IndexIDMap::search would.
+            for (int i = 0; i < k; ++i) {
+                ids[i] = innerIds[i] == std::numeric_limits<size_t>::max()
+                    ? -1
+                    : indexReader->id_map[innerIds[i]];
+            }
+        } catch (...) {
+            jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
+            throw;
+        }
+        jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
+        return buildQueryResults(jniUtil, env, ids, dis, k);
+    }
+
     if (filterIdsJ != nullptr) {
         jlong *filteredIdsArray = jniUtil->GetLongArrayElements(env, filterIdsJ, nullptr);
         int filterIdsLength = jniUtil->GetJavaLongArrayLength(env, filterIdsJ);
@@ -378,16 +473,16 @@ jobjectArray knn_jni::svs_wrapper::QueryIndex_WithFilter(knn_jni::JNIUtilInterfa
 
 jobjectArray knn_jni::svs_wrapper::RangeSearch(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env, jlong indexPointerJ,
                                                jfloatArray queryVectorJ, jfloat radiusJ, jobject methodParamsJ,
-                                               jint maxResultWindowJ) {
+                                               jint maxResultWindowJ, jintArray parentIdsJ) {
     return RangeSearch_WithFilter(jniUtil, env, indexPointerJ, queryVectorJ, radiusJ, methodParamsJ,
-                                  maxResultWindowJ, nullptr, 0);
+                                  maxResultWindowJ, nullptr, 0, parentIdsJ);
 }
 
 jobjectArray knn_jni::svs_wrapper::RangeSearch_WithFilter(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env,
                                                           jlong indexPointerJ, jfloatArray queryVectorJ,
                                                           jfloat radiusJ, jobject methodParamsJ,
                                                           jint maxResultWindowJ, jlongArray filterIdsJ,
-                                                          jint filterIdsTypeJ) {
+                                                          jint filterIdsTypeJ, jintArray parentIdsJ) {
     if (queryVectorJ == nullptr) {
         throw std::runtime_error("Query Vector cannot be null");
     }
@@ -421,7 +516,48 @@ jobjectArray knn_jni::svs_wrapper::RangeSearch_WithFilter(knn_jni::JNIUtilInterf
     // Set omp threads to 1 so no new OMP threads are created under the search threadpool.
     omp_set_num_threads(1);
 
-    if (filterIdsJ != nullptr) {
+    if (parentIdsJ != nullptr) {
+        // Nested radial search: best child per parent among the in-radius results. Same direct runtime
+        // call as the nested top-k path (the vendored SearchParametersSVSVamana carries no grouper),
+        // reusing the vendored FaissResultsAllocator to fill the faiss RangeSearchResult.
+        try {
+            auto parentIdsCpp = jniUtil->ConvertJavaIntArrayToCppIntVector(env, parentIdsJ);
+            std::sort(parentIdsCpp.begin(), parentIdsCpp.end());
+            SvsParentIdGrouper grouper{indexReader->id_map, std::move(parentIdsCpp)};
+
+            svs_runtime::VamanaIndex::SearchParams runtimeParams{
+                svsVamanaParams.search_window_size, svsVamanaParams.search_buffer_capacity};
+
+            svs_runtime::Status status;
+            if (filterIdsJ != nullptr) {
+                jlong *filteredIdsArray = jniUtil->GetLongArrayElements(env, filterIdsJ, nullptr);
+                int filterIdsLength = jniUtil->GetJavaLongArrayLength(env, filterIdsJ);
+                std::unique_ptr<faiss::IDSelector> idSelector;
+                if (filterIdsTypeJ == BITMAP) {
+                    idSelector.reset(new faiss::IDSelectorJlongBitmap(filterIdsLength, filteredIdsArray));
+                } else {
+                    faiss::idx_t* batchIndices = reinterpret_cast<faiss::idx_t*>(filteredIdsArray);
+                    idSelector.reset(new faiss::IDSelectorBatch(filterIdsLength, batchIndices));
+                }
+                IDSelectorSvsTranslated translatedSelector(indexReader->id_map, idSelector.get());
+                SvsRuntimeSelectorFilter runtimeFilter{translatedSelector};
+                status = svsVamanaReader->impl->range_search(
+                    1, rawQueryVector, radiusJ, faiss::FaissResultsAllocator{&res}, &runtimeParams,
+                    &runtimeFilter, &grouper);
+                jniUtil->ReleaseLongArrayElements(env, filterIdsJ, filteredIdsArray, JNI_ABORT);
+            } else {
+                status = svsVamanaReader->impl->range_search(
+                    1, rawQueryVector, radiusJ, faiss::FaissResultsAllocator{&res}, &runtimeParams,
+                    nullptr, &grouper);
+            }
+            if (!status.ok()) {
+                throw std::runtime_error(std::string("SVS nested radial search failed: ") + status.message());
+            }
+        } catch (...) {
+            jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
+            throw;
+        }
+    } else if (filterIdsJ != nullptr) {
         jlong *filteredIdsArray = jniUtil->GetLongArrayElements(env, filterIdsJ, nullptr);
         int filterIdsLength = jniUtil->GetJavaLongArrayLength(env, filterIdsJ);
         std::unique_ptr<faiss::IDSelector> idSelector;

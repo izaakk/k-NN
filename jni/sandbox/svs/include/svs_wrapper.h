@@ -37,24 +37,29 @@ namespace knn_jni {
         jlong LoadIndexWithStream(faiss::IOReader* ioReader);
 
         // Top-k search; methodParamsJ may carry search_window_size / search_buffer_capacity overrides.
+        // A non-null parentIdsJ (sorted parent doc ids, one bit-position per nested document) makes this a
+        // nested search: one best child per parent, kJ counts distinct parents.
         jobjectArray QueryIndex(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env, jlong indexPointerJ,
-                                jfloatArray queryVectorJ, jint kJ, jobject methodParamsJ);
+                                jfloatArray queryVectorJ, jint kJ, jobject methodParamsJ, jintArray parentIdsJ);
 
-        // Top-k search restricted to filterIdsJ (bitmap or batch encoding, per filterIdsTypeJ).
+        // Top-k search restricted to filterIdsJ (bitmap or batch encoding, per filterIdsTypeJ); parentIdsJ
+        // as in QueryIndex (the filter decides candidacy, the parent grouping deduplicates results).
         jobjectArray QueryIndex_WithFilter(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env, jlong indexPointerJ,
                                            jfloatArray queryVectorJ, jint kJ, jobject methodParamsJ,
-                                           jlongArray filterIdsJ, jint filterIdsTypeJ);
+                                           jlongArray filterIdsJ, jint filterIdsTypeJ, jintArray parentIdsJ);
 
         // Radial (range) search: every neighbor within radiusJ (faiss-domain, must be > 0), capped at
-        // maxResultWindowJ; methodParamsJ may carry a search_window_size override.
+        // maxResultWindowJ; methodParamsJ may carry a search_window_size override. A non-null parentIdsJ
+        // reduces the in-radius results to the best child per parent.
         jobjectArray RangeSearch(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env, jlong indexPointerJ,
                                  jfloatArray queryVectorJ, jfloat radiusJ, jobject methodParamsJ,
-                                 jint maxResultWindowJ);
+                                 jint maxResultWindowJ, jintArray parentIdsJ);
 
         // Radial search restricted to filterIdsJ (bitmap or batch encoding, per filterIdsTypeJ).
         jobjectArray RangeSearch_WithFilter(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env, jlong indexPointerJ,
                                             jfloatArray queryVectorJ, jfloat radiusJ, jobject methodParamsJ,
-                                            jint maxResultWindowJ, jlongArray filterIdsJ, jint filterIdsTypeJ);
+                                            jint maxResultWindowJ, jlongArray filterIdsJ, jint filterIdsTypeJ,
+                                            jintArray parentIdsJ);
 
         // Free the index at the given address.
         void Free(jlong indexPointerJ);

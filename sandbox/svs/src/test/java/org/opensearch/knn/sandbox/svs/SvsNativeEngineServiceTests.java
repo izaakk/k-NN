@@ -11,27 +11,12 @@ import java.util.Map;
 
 /**
  * Pins the query-time rejection paths of {@link SvsNativeEngineService}. All of these throw before any
- * native call, so this suite runs without the SVS native library.
+ * native call, so this suite runs without the SVS native library. (Nested queries no longer reject here:
+ * parentIds route through to the native IDGrouper path, covered by the nested IT.)
  */
 public class SvsNativeEngineServiceTests extends OpenSearchTestCase {
 
     private final SvsNativeEngineService service = new SvsNativeEngineService();
-
-    public void testQueryIndex_whenParentIds_thenNestedRejected() {
-        UnsupportedOperationException e = expectThrows(
-            UnsupportedOperationException.class,
-            () -> service.queryIndex(1L, new float[] { 1f }, 10, Map.of(), null, 0, new int[] { 3, 7 })
-        );
-        assertTrue(e.getMessage(), e.getMessage().contains("Nested fields are not supported"));
-    }
-
-    public void testRadiusQueryIndex_whenParentIds_thenNestedRejected() {
-        UnsupportedOperationException e = expectThrows(
-            UnsupportedOperationException.class,
-            () -> service.radiusQueryIndex(1L, new float[] { 1f }, 1.0f, Map.of(), 10000, null, 0, new int[] { 3, 7 })
-        );
-        assertTrue(e.getMessage(), e.getMessage().contains("Nested fields are not supported"));
-    }
 
     /**
      * The SVS index only accepts a strictly positive faiss-domain radius; the subset of inner-product and

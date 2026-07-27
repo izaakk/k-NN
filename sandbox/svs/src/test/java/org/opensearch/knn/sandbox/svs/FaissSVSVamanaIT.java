@@ -7,7 +7,6 @@ package org.opensearch.knn.sandbox.svs;
 
 import lombok.SneakyThrows;
 import org.apache.hc.core5.http.io.entity.EntityUtils;
-import org.opensearch.client.Request;
 import org.opensearch.client.Response;
 import org.opensearch.client.ResponseException;
 import org.opensearch.common.settings.Settings;
@@ -340,51 +339,8 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
         deleteKNNIndex(indexName);
     }
 
-    // ------------------------------------------------------------------ nested (pinned rejection)
-
-    // Nested fields need per-parent grouping inside the SVS runtime's graph search, which its API does not
-    // expose; pin the tenant's explicit query-time rejection until that lands.
-    @SneakyThrows
-    public void testSVSVamana_whenNestedField_thenRejected() {
-        final String indexName = "test-svs-vamana-nested";
-        XContentBuilder builder = XContentFactory.jsonBuilder()
-            .startObject()
-            .startObject("properties")
-            .startObject("nested_field")
-            .field("type", "nested")
-            .startObject("properties")
-            .startObject("v")
-            .field("type", "knn_vector")
-            .field("dimension", DIMENSION)
-            .startObject(KNN_METHOD)
-            .field(NAME, SVS_VAMANA)
-            .field(METHOD_PARAMETER_SPACE_TYPE, SpaceType.L2.getValue())
-            .field(KNN_ENGINE, SVS_ENGINE)
-            .startObject(PARAMETERS)
-            .field("degree", 64)
-            .endObject()
-            .endObject()
-            .endObject()
-            .endObject()
-            .endObject()
-            .endObject()
-            .endObject();
-        createKnnIndex(indexName, builder.toString());
-
-        Request doc = new Request("POST", "/" + indexName + "/_doc/1?refresh=true");
-        doc.setJsonEntity("{\"nested_field\": [{\"v\": [1.0, 1.0, 1.0]}, {\"v\": [2.0, 2.0, 2.0]}]}");
-        client().performRequest(doc);
-
-        Request search = new Request("GET", "/" + indexName + "/_search");
-        search.setJsonEntity(
-            "{\"query\": {\"nested\": {\"path\": \"nested_field\", "
-                + "\"query\": {\"knn\": {\"nested_field.v\": {\"vector\": [1.0, 1.0, 1.0], \"k\": 2}}}}}}"
-        );
-        ResponseException e = expectThrows(ResponseException.class, () -> client().performRequest(search));
-        assertTrue(EntityUtils.toString(e.getResponse().getEntity()).contains("Nested fields are not supported"));
-
-        deleteKNNIndex(indexName);
-    }
+    // Nested (multi-vector) search is covered by FaissSVSVamanaNestedIT: it runs through the SVS runtime's
+    // IDGrouper (one best child per parent during graph search), mirroring the core NestedSearchIT scenarios.
 
     // ------------------------------------------------------------------ helpers
 

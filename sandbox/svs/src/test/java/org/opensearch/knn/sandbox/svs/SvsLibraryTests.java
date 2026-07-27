@@ -20,8 +20,8 @@ public class SvsLibraryTests extends OpenSearchTestCase {
         assertTrue(SvsLibrary.INSTANCE.createsCustomSegmentFiles());
         assertTrue(SvsLibrary.INSTANCE.supportsFilters());
         assertTrue(SvsLibrary.INSTANCE.supportsRadialSearch());
-        // Nested needs grouping inside the SVS runtime's graph search, which its API does not expose yet.
-        assertFalse(SvsLibrary.INSTANCE.supportsNestedFields());
+        // Nested runs through the SVS runtime's IDGrouper (one best child per parent during graph search).
+        assertTrue(SvsLibrary.INSTANCE.supportsNestedFields());
     }
 
     public void testExtension() {

@@ -100,6 +100,15 @@ public class SvsLibrary extends NativeLibrary {
     }
 
     @Override
+    public boolean supportsNestedFields() {
+        // Nested (multi-vector) search runs through the SVS runtime's IDGrouper: the native layer passes a
+        // one-best-per-parent grouper to VamanaIndex#search/#range_search, giving the same k-distinct-parents
+        // guarantee as the patched-faiss engines (exact grouping during graph search, not an oversampled
+        // post-grouping emulation).
+        return true;
+    }
+
+    @Override
     public boolean supportsRadialSearch() {
         // Radial search runs natively through IndexSVSVamana#range_search. The SVS index only accepts a
         // strictly positive faiss-domain radius, so the inner-product/cosine thresholds that convert to a
