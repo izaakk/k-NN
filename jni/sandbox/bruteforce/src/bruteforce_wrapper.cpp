@@ -21,7 +21,6 @@ namespace {
 
 constexpr int32_t SERIALIZATION_MAGIC = 0x42465631;  // "BFV1"
 constexpr const char *SPACE_TYPE_PARAM = "space_type";
-constexpr const char *SCAN_LIMIT_PARAM = "scan_limit";
 constexpr const char *L2_SPACE = "l2";
 
 // The whole engine state: doc ids and their vectors, row-major, plus the space.
@@ -156,21 +155,17 @@ jlong knn_jni::bruteforce_wrapper::LoadIndexWithStream(knn_jni::JNIUtilInterface
 }
 
 jobjectArray knn_jni::bruteforce_wrapper::QueryIndex(knn_jni::JNIUtilInterface *jniUtil, JNIEnv *env, jlong indexPointer,
-                                                     jfloatArray queryVectorJ, jint k, jobject methodParamsJ) {
+                                                     jfloatArray queryVectorJ, jint k, jint scanLimit) {
     BruteForceIndex *index = existing(indexPointer);
     if (jniUtil->GetJavaFloatArrayLength(env, queryVectorJ) != index->dim) {
         throw std::runtime_error("bruteforce: query dimension mismatch");
     }
 
-    // scan_limit caps how many vectors are scanned. Absent means scan everything.
-    std::unordered_map<std::string, jobject> methodParams;
-    if (methodParamsJ != nullptr) {
-        methodParams = jniUtil->ConvertJavaMapToCppMap(env, methodParamsJ);
-    }
-    const size_t scanRows = std::min(
-        index->ids.size(),
-        static_cast<size_t>(knn_jni::commons::getIntegerMethodParameter(
-            env, jniUtil, methodParams, SCAN_LIMIT_PARAM, static_cast<int>(index->ids.size()))));
+    // scan_limit caps how many vectors are scanned, negative means scan everything. The Java side reads
+    // it through a typed parameter key, so no map crosses this boundary for the query path.
+    const size_t scanRows = scanLimit < 0
+        ? index->ids.size()
+        : std::min(index->ids.size(), static_cast<size_t>(scanLimit));
 
     jfloat *query = jniUtil->GetFloatArrayElements(env, queryVectorJ, nullptr);
     std::vector<std::pair<float, int32_t>> closest;

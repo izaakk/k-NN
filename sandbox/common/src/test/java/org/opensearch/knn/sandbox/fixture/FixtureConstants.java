@@ -30,5 +30,9 @@ public final class FixtureConstants {
      */
     public static final String METHOD_PARAMETER_FIXTURE_WINDOW = "fixture_window";
 
+    /** Typed key for the same parameter, the read side of the structured params demo. */
+    public static final org.opensearch.knn.index.engine.ParameterKey<Integer> FIXTURE_WINDOW = org.opensearch.knn.index.engine.ParameterKey
+        .intKey(METHOD_PARAMETER_FIXTURE_WINDOW);
+
     private FixtureConstants() {}
 }

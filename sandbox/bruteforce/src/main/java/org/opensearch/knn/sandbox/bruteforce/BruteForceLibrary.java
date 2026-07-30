@@ -42,6 +42,11 @@ public final class BruteForceLibrary extends NativeLibrary {
     public static final String EXTENSION = ".bruteforce";
     /** The engine's one query-time parameter: scan only the first {@code scan_limit} vectors. */
     public static final String SCAN_LIMIT = "scan_limit";
+
+    /** Typed key for the same parameter, used for the read in the engine service. */
+    static final org.opensearch.knn.index.engine.ParameterKey<Integer> SCAN_LIMIT_KEY = org.opensearch.knn.index.engine.ParameterKey.intKey(
+        SCAN_LIMIT
+    );
     /** Key used to hand the space type to the engine service. */
     static final String PARAM_SPACE_TYPE = "space_type";
 

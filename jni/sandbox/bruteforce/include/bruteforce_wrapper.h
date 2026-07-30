@@ -21,7 +21,7 @@ void WriteIndex(knn_jni::JNIUtilInterface *jniUtil, JNIEnv *env, jlong indexAddr
 
 jlong LoadIndexWithStream(knn_jni::JNIUtilInterface *jniUtil, JNIEnv *env, jobject readStreamJ);
 
-jobjectArray QueryIndex(knn_jni::JNIUtilInterface *jniUtil, JNIEnv *env, jlong indexPointer, jfloatArray queryVectorJ, jint k, jobject methodParamsJ);
+jobjectArray QueryIndex(knn_jni::JNIUtilInterface *jniUtil, JNIEnv *env, jlong indexPointer, jfloatArray queryVectorJ, jint k, jint scanLimit);
 
 void Free(jlong indexPointer);
 

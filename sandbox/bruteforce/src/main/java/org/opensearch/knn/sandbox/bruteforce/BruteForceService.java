@@ -36,7 +36,7 @@ final class BruteForceService {
 
     static native long loadIndexWithStream(IndexInputWithBuffer readStream);
 
-    static native KNNQueryResult[] queryIndex(long indexPointer, float[] queryVector, int k, Map<String, ?> methodParameters);
+    static native KNNQueryResult[] queryIndex(long indexPointer, float[] queryVector, int k, int scanLimit);
 
     static native void free(long indexPointer);
 }

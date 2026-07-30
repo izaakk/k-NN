@@ -77,9 +77,9 @@ JNIEXPORT jobjectArray JNICALL Java_org_opensearch_knn_sandbox_bruteforce_BruteF
                                                                                                        jlong indexPointer,
                                                                                                        jfloatArray queryVectorJ,
                                                                                                        jint k,
-                                                                                                       jobject methodParamsJ) {
+                                                                                                       jint scanLimit) {
     try {
-        return knn_jni::bruteforce_wrapper::QueryIndex(&jniUtil, env, indexPointer, queryVectorJ, k, methodParamsJ);
+        return knn_jni::bruteforce_wrapper::QueryIndex(&jniUtil, env, indexPointer, queryVectorJ, k, scanLimit);
     } catch (...) {
         jniUtil.CatchCppExceptionAndThrowJava(env);
     }

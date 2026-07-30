@@ -42,10 +42,10 @@ JNIEXPORT jlong JNICALL Java_org_opensearch_knn_sandbox_bruteforce_BruteForceSer
 /*
  * Class:     org_opensearch_knn_sandbox_bruteforce_BruteForceService
  * Method:    queryIndex
- * Signature: (J[FILjava/util/Map;)[Lorg/opensearch/knn/index/query/KNNQueryResult;
+ * Signature: (J[FII)[Lorg/opensearch/knn/index/query/KNNQueryResult;
  */
 JNIEXPORT jobjectArray JNICALL Java_org_opensearch_knn_sandbox_bruteforce_BruteForceService_queryIndex
-  (JNIEnv *, jclass, jlong, jfloatArray, jint, jobject);
+  (JNIEnv *, jclass, jlong, jfloatArray, jint, jint);
 
 /*
  * Class:     org_opensearch_knn_sandbox_bruteforce_BruteForceService

@@ -10,8 +10,6 @@ import org.opensearch.knn.index.query.KNNQueryResult;
 import org.opensearch.knn.index.store.IndexInputWithBuffer;
 import org.opensearch.knn.index.store.IndexOutputWithBuffer;
 
-import java.util.Map;
-
 /**
  * Generic native-index lifecycle contract for an engine that is contributed at runtime (rather than being a
  * built-in such as Faiss or NMSLIB). {@link org.opensearch.knn.jni.JNIService} routes the eight lifecycle/search operations
@@ -31,45 +29,26 @@ import java.util.Map;
 @ExperimentalApi
 public interface NativeEngineService {
 
-    long initIndex(long numDocs, int dim, Map<String, Object> parameters);
+    long initIndex(NativeIndexBuildParams params);
 
     /** {@code vectorsAddress} is an off-heap address of the vectors to copy. */
-    void insertToIndex(int[] docs, long vectorsAddress, int dimension, Map<String, Object> parameters, long indexAddress);
+    void insertToIndex(int[] docs, long vectorsAddress, long indexAddress, NativeIndexBuildParams params);
 
-    void writeIndex(IndexOutputWithBuffer output, long indexAddress, Map<String, Object> parameters, boolean skipFlat);
+    void writeIndex(IndexOutputWithBuffer output, long indexAddress, NativeIndexBuildParams params);
 
     void createIndexFromTemplate(
         int[] ids,
         long vectorsAddress,
-        int dim,
         IndexOutputWithBuffer output,
         byte[] templateIndex,
-        Map<String, Object> parameters
+        NativeIndexBuildParams params
     );
 
-    long loadIndex(IndexInputWithBuffer readStream, Map<String, Object> parameters);
+    long loadIndex(IndexInputWithBuffer readStream, NativeIndexBuildParams params);
 
-    /** {@code filterIdsType} discriminates the {@code filteredIds} encoding. */
-    KNNQueryResult[] queryIndex(
-        long indexPointer,
-        float[] queryVector,
-        int k,
-        Map<String, ?> methodParameters,
-        long[] filteredIds,
-        int filterIdsType,
-        int[] parentIds
-    );
+    KNNQueryResult[] queryIndex(long indexPointer, NativeSearchParams params);
 
-    KNNQueryResult[] radiusQueryIndex(
-        long indexPointer,
-        float[] queryVector,
-        float radius,
-        Map<String, ?> methodParameters,
-        int indexMaxResultWindow,
-        long[] filteredIds,
-        int filterIdsType,
-        int[] parentIds
-    );
+    KNNQueryResult[] radiusQueryIndex(long indexPointer, NativeSearchParams params);
 
     void free(long indexPointer, boolean isBinaryIndex);
 }

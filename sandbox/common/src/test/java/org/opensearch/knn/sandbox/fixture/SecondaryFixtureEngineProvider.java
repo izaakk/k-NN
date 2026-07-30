@@ -34,7 +34,7 @@ public final class SecondaryFixtureEngineProvider implements KNNEngineDefinition
 
     static final NativeEngineService SERVICE = new AbstractNativeEngineService(SECONDARY_FIXTURE_ENGINE_NAME) {
         @Override
-        public long initIndex(long numDocs, int dim, Map<String, Object> parameters) {
+        public long initIndex(org.opensearch.knn.index.engine.NativeIndexBuildParams params) {
             OP_LOG.add("initIndex");
             return 4242L;
         }
