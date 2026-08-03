@@ -26,6 +26,7 @@ import static org.opensearch.knn.common.KNNConstants.ENCODER_SQ;
 import static org.opensearch.knn.common.KNNConstants.FAISS_FLAT_DESCRIPTION;
 import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
 import static org.opensearch.knn.sandbox.svs.SVSConstants.DEFAULT_CONSTRUCTION_WINDOW_SIZE;
+import static org.opensearch.knn.sandbox.svs.SVSConstants.FAISS_SVS_ENCODER_LEANVEC;
 import static org.opensearch.knn.sandbox.svs.SVSConstants.FAISS_SVS_ENCODER_LVQ;
 import static org.opensearch.knn.sandbox.svs.SVSConstants.FAISS_SVS_VAMANA_DESCRIPTION;
 import static org.opensearch.knn.sandbox.svs.SVSConstants.METHOD_PARAMETER_ALPHA;
@@ -44,14 +45,16 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
 
     public final static List<SpaceType> SUPPORTED_SPACES = Arrays.asList(SpaceType.L2, SpaceType.INNER_PRODUCT, SpaceType.COSINESIMIL);
 
-    // FLAT, SQ (fp16/sq8), and LVQ. LeanVec is excluded: it requires model training, out of scope for the sandbox.
+    // FLAT, SQ (fp16/sq8), LVQ, and LeanVec (deferred training at segment-build time; no Train API needed).
     public final static Map<String, Encoder> SUPPORTED_ENCODERS = Map.of(
         ENCODER_FLAT,
         new FaissFlatEncoder(),
         ENCODER_SQ,
         new FaissSVSSQEncoder(),
         FAISS_SVS_ENCODER_LVQ,
-        new FaissSVSLVQEncoder()
+        new FaissSVSLVQEncoder(),
+        FAISS_SVS_ENCODER_LEANVEC,
+        new FaissSVSLeanVecEncoder()
     );
 
     private final static MethodComponentContext DEFAULT_ENCODER_CONTEXT = new MethodComponentContext(ENCODER_FLAT, Collections.emptyMap());

@@ -51,14 +51,15 @@ public class FaissSVSVamanaMethodTests extends OpenSearchTestCase {
         assertTrue(FaissSVSVamanaMethod.SUPPORTED_SPACES.contains(SpaceType.COSINESIMIL));
     }
 
-    public void testSupportedEncoders_sqFlatLvq_notSvsPrefixed() {
+    public void testSupportedEncoders_sqFlatLvqLeanVec_notSvsPrefixed() {
         assertTrue(FaissSVSVamanaMethod.SUPPORTED_ENCODERS.containsKey(ENCODER_SQ));
         assertTrue(FaissSVSVamanaMethod.SUPPORTED_ENCODERS.containsKey(ENCODER_FLAT));
         assertTrue(FaissSVSVamanaMethod.SUPPORTED_ENCODERS.containsKey(FAISS_SVS_ENCODER_LVQ));
+        assertTrue(FaissSVSVamanaMethod.SUPPORTED_ENCODERS.containsKey(SVSConstants.FAISS_SVS_ENCODER_LEANVEC));
         // Old svs_-prefixed encoder names must no longer be registered.
         assertFalse(FaissSVSVamanaMethod.SUPPORTED_ENCODERS.containsKey("svs_fp16"));
         assertFalse(FaissSVSVamanaMethod.SUPPORTED_ENCODERS.containsKey("svs_sq8"));
-        assertEquals(3, FaissSVSVamanaMethod.SUPPORTED_ENCODERS.size());
+        assertEquals(4, FaissSVSVamanaMethod.SUPPORTED_ENCODERS.size());
     }
 
     public void testParametersPresent_degreeConstructionAlpha() {
@@ -145,6 +146,44 @@ public class FaissSVSVamanaMethodTests extends OpenSearchTestCase {
             // The LVQ generator runs the encoder's platform check, which needs the SVS native library; in a
             // pure-JVM unit run there is none to load. The LVQ description is asserted end-to-end by the IT.
             org.junit.Assume.assumeNoException("LVQ platform check needs the SVS native library", e);
+        }
+    }
+
+    public void testIndexDescription_whenLeanVecEncoder_thenBitsAndDimsSuffixed() {
+        MethodComponentContext leanVec = new MethodComponentContext(
+            SVSConstants.FAISS_SVS_ENCODER_LEANVEC,
+            Map.of(
+                METHOD_PARAMETER_LVQ_PRIMARY_BITS,
+                4,
+                METHOD_PARAMETER_LVQ_RESIDUAL_BITS,
+                8,
+                SVSConstants.METHOD_PARAMETER_LEANVEC_DIMENSIONS,
+                192
+            )
+        );
+        try {
+            assertEquals(
+                "SVSVamana64,LeanVec4x8_192",
+                indexDescriptionFor(
+                    new MethodComponentContext(METHOD_SVS_VAMANA, Map.of(METHOD_PARAMETER_DEGREE, 64, METHOD_ENCODER_PARAMETER, leanVec))
+                )
+            );
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            org.junit.Assume.assumeNoException("LeanVec platform check needs the SVS native library", e);
+        }
+    }
+
+    public void testIndexDescription_whenLeanVecEncoderNoDims_thenNoSuffix() {
+        MethodComponentContext leanVec = new MethodComponentContext(SVSConstants.FAISS_SVS_ENCODER_LEANVEC, Map.of());
+        try {
+            assertEquals(
+                "SVSVamana64,LeanVec4x8",
+                indexDescriptionFor(
+                    new MethodComponentContext(METHOD_SVS_VAMANA, Map.of(METHOD_PARAMETER_DEGREE, 64, METHOD_ENCODER_PARAMETER, leanVec))
+                )
+            );
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            org.junit.Assume.assumeNoException("LeanVec platform check needs the SVS native library", e);
         }
     }
 

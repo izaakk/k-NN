@@ -53,6 +53,17 @@ public final class SVSConstants {
     public static final String METHOD_PARAMETER_LVQ_PRIMARY_BITS = "primary_bits";
     public static final String METHOD_PARAMETER_LVQ_RESIDUAL_BITS = "residual_bits";
 
+    // LeanVec encoder (deferred training). Shares the primary/residual bit parameter names with LVQ and adds
+    // the reduced dimensionality plus the two-threshold training ladder knobs (see the tenant README).
+    public static final String FAISS_SVS_ENCODER_LEANVEC = "leanvec";
+    public static final String METHOD_PARAMETER_LEANVEC_DIMENSIONS = "dimensions";
+    public static final String METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD = "training_threshold";
+    public static final String METHOD_PARAMETER_LEANVEC_ROUGH_TRAINING_THRESHOLD = "rough_training_threshold";
+    // Fork-proven defaults: segments under the rough threshold fall back to LVQ; between the two the
+    // projection trains on the whole segment; above the final threshold on a training_threshold-sized sample.
+    public static final int LEANVEC_DEFAULT_TRAINING_THRESHOLD = 100_000;
+    public static final int LEANVEC_DEFAULT_ROUGH_TRAINING_THRESHOLD = 10_000;
+
     // Default construction window size (mirrors main KNNSettings default in 3.4-era code).
     public static final int DEFAULT_CONSTRUCTION_WINDOW_SIZE = 128;
 }

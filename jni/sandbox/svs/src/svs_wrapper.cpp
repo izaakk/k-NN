@@ -32,6 +32,7 @@
 #include "faiss/index_factory.h"
 #include "faiss/index_io.h"
 #include "faiss/svs/IndexSVSVamana.h"
+#include "faiss/svs/IndexSVSVamanaLeanVec.h"
 
 #include <omp.h>
 
@@ -170,6 +171,95 @@ jobjectArray buildQueryResults(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env
     return results;
 }
 
+// Build-side handle: what InitIndex returns and InsertToIndex/WriteIndex consume. The search and Free
+// paths never see it (they only receive addresses from LoadIndexWithStream, which stay raw faiss
+// indexes), and core never frees a build handle itself: WriteIndex owns the teardown.
+//
+// For deferred-training LeanVec builds, the handle additionally buffers the first
+// min(training_threshold, numDocs) vectors (copies: the core-owned off-heap block is reused per batch);
+// once the buffer is full the LeanVec projection trains on it, the buffer drains into the index, and all
+// later batches stream straight through. trainTarget == 0 means no deferral is pending (either a
+// train-free build, or training already happened).
+struct SvsBuildContext {
+    std::unique_ptr<faiss::IndexIDMap> idMap;
+    int dim = 0;
+    size_t trainTarget = 0;
+    std::vector<float> bufferedVectors;
+    std::vector<faiss::idx_t> bufferedIds;
+
+    bool deferralPending() const { return trainTarget != 0; }
+
+    // Train the LeanVec projection on the first min(trainTarget, buffered) vectors, then drain the whole
+    // buffer into the index. Called when the buffer reaches trainTarget, or from WriteIndex if the vector
+    // stream ended early (defensive: numDocs overcounts should not starve training forever).
+    void trainAndDrain() {
+        size_t buffered = bufferedIds.size();
+        if (buffered == 0) {
+            throw std::runtime_error("Deferred LeanVec training reached the write phase with no vectors buffered");
+        }
+        size_t trainCount = std::min(trainTarget, buffered);
+        idMap->train(static_cast<faiss::idx_t>(trainCount), bufferedVectors.data());
+        idMap->add_with_ids(static_cast<faiss::idx_t>(buffered), bufferedVectors.data(), bufferedIds.data());
+        std::vector<float>().swap(bufferedVectors);
+        std::vector<faiss::idx_t>().swap(bufferedIds);
+        trainTarget = 0;
+    }
+};
+
+// Reads an integer parameter from the method's nested encoder sub-map ({"encoder": {"name": ...,
+// "parameters": {...}}}); returns fallback when any level is absent or the stored value is not positive
+// (the Java encoder passes 0 for "use the default").
+int64_t readEncoderIntParam(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env,
+                            const std::unordered_map<std::string, jobject>& methodParams,
+                            const std::string& paramName, int64_t fallback) {
+    auto encoderIt = methodParams.find(knn_jni::ENCODER);
+    if (encoderIt == methodParams.end() || encoderIt->second == nullptr) {
+        return fallback;
+    }
+    auto encoderMap = jniUtil->ConvertJavaMapToCppMap(env, encoderIt->second);
+    auto paramsIt = encoderMap.find(knn_jni::PARAMETERS);
+    if (paramsIt == encoderMap.end() || paramsIt->second == nullptr) {
+        return fallback;
+    }
+    auto encoderParams = jniUtil->ConvertJavaMapToCppMap(env, paramsIt->second);
+    auto valueIt = encoderParams.find(paramName);
+    if (valueIt == encoderParams.end() || valueIt->second == nullptr) {
+        return fallback;
+    }
+    int64_t value = jniUtil->ConvertJavaObjectToCppInteger(env, valueIt->second);
+    return value > 0 ? value : fallback;
+}
+
+// Rewrites the LeanVec token of an index description to its training-free LVQ equivalent, e.g.
+// "SVSVamana64,LeanVec4x8_192" -> "SVSVamana64,LVQ4x8". Used for segments below the rough training
+// threshold; a merge above the threshold rebuilds them as real LeanVec. LeanVec8x8 has no LVQ8x8
+// counterpart in the factory, so it degrades to LVQ4x8 (the closest supported kind).
+std::string rewriteLeanVecToLvq(const std::string& description) {
+    size_t tokenStart = description.find(",LeanVec");
+    if (tokenStart == std::string::npos) {
+        throw std::runtime_error("Not a LeanVec index description: " + description);
+    }
+    size_t bitsStart = tokenStart + 8;  // past ",LeanVec"
+    size_t tokenEnd = description.find(',', bitsStart);
+    std::string bits = description.substr(bitsStart, (tokenEnd == std::string::npos ? description.size() : tokenEnd) - bitsStart);
+    // Strip an optional "_<leanvec_dims>" suffix: the LVQ fallback keeps full dimensionality.
+    size_t dimsSuffix = bits.find('_');
+    if (dimsSuffix != std::string::npos) {
+        bits = bits.substr(0, dimsSuffix);
+    }
+    if (bits == "8x8") {
+        bits = "4x8";
+    }
+    if (bits != "4x4" && bits != "4x8") {
+        throw std::runtime_error("Unsupported LeanVec kind for LVQ fallback in description: " + description);
+    }
+    std::string rewritten = description.substr(0, tokenStart) + ",LVQ" + bits;
+    if (tokenEnd != std::string::npos) {
+        rewritten += description.substr(tokenEnd);
+    }
+    return rewritten;
+}
+
 }  // namespace
 
 jlong knn_jni::svs_wrapper::InitIndex(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env, jlong numDocs, jint dimJ,
@@ -207,6 +297,29 @@ jlong knn_jni::svs_wrapper::InitIndex(knn_jni::JNIUtilInterface * jniUtil, JNIEn
         omp_set_num_threads(threadCount);
     }
 
+    // Deferred-training LeanVec: pick the ladder rung from the segment's vector count before the factory
+    // parses the description. Below the rough threshold the description is rewritten to the training-free
+    // LVQ equivalent (a later merge above the threshold rebuilds it as real LeanVec); at or above it the
+    // build defers into a buffered training context sized min(training_threshold, numDocs).
+    size_t trainTarget = 0;
+    if (indexDescriptionCpp.find(",LeanVec") != std::string::npos) {
+        int64_t roughThreshold = readEncoderIntParam(
+            jniUtil, env, subParametersCpp, knn_jni::LEANVEC_ROUGH_TRAINING_THRESHOLD,
+            knn_jni::LEANVEC_DEFAULT_ROUGH_TRAINING_THRESHOLD);
+        int64_t finalThreshold = readEncoderIntParam(
+            jniUtil, env, subParametersCpp, knn_jni::LEANVEC_TRAINING_THRESHOLD,
+            knn_jni::LEANVEC_DEFAULT_TRAINING_THRESHOLD);
+        if (numDocs < roughThreshold) {
+            std::string rewritten = rewriteLeanVecToLvq(indexDescriptionCpp);
+            std::cerr << "[KNN-SVS] Segment of " << numDocs << " vectors is below the LeanVec rough training threshold ("
+                      << roughThreshold << "); building \"" << rewritten << "\" instead of \"" << indexDescriptionCpp
+                      << "\" (upgrades to LeanVec on merge)\n";
+            indexDescriptionCpp = rewritten;
+        } else {
+            trainTarget = static_cast<size_t>(std::min<int64_t>(finalThreshold, numDocs));
+        }
+    }
+
     // The description (e.g. "SVSVamana64,LVQ4x4") comes from the sandbox method/encoder mapping and is
     // parsed by the unmodified upstream faiss factory.
     std::unique_ptr<faiss::Index> index(faiss::index_factory(static_cast<int>(dimJ), indexDescriptionCpp.c_str(), metric));
@@ -217,7 +330,7 @@ jlong knn_jni::svs_wrapper::InitIndex(knn_jni::JNIUtilInterface * jniUtil, JNIEn
     }
     applySVSVamanaParameters(jniUtil, env, subParametersCpp, svsIndex);
 
-    if (!index->is_trained) {
+    if (!index->is_trained && trainTarget == 0) {
         throw std::runtime_error("Index is not trained");
     }
 
@@ -226,7 +339,16 @@ jlong knn_jni::svs_wrapper::InitIndex(knn_jni::JNIUtilInterface * jniUtil, JNIEn
     idMap->own_fields = true;
     index.release();
 
-    return reinterpret_cast<jlong>(idMap.release());
+    auto context = std::make_unique<SvsBuildContext>();
+    context->dim = static_cast<int>(dimJ);
+    if (!idMap->is_trained && trainTarget > 0) {
+        context->trainTarget = trainTarget;
+        context->bufferedVectors.reserve(trainTarget * static_cast<size_t>(dimJ));
+        context->bufferedIds.reserve(trainTarget);
+    }
+    context->idMap = std::move(idMap);
+
+    return reinterpret_cast<jlong>(context.release());
 }
 
 void knn_jni::svs_wrapper::InsertToIndex(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env, jintArray idsJ,
@@ -258,8 +380,22 @@ void knn_jni::svs_wrapper::InsertToIndex(knn_jni::JNIUtilInterface * jniUtil, JN
         omp_set_num_threads(threadCount);
     }
 
-    auto *idMap = reinterpret_cast<faiss::IndexIDMap *>(indexAddressJ);
-    extractSVSVamana(idMap);  // validate the pointer really is an SVS index
+    auto *context = reinterpret_cast<SvsBuildContext *>(indexAddressJ);
+    faiss::IndexIDMap *idMap = context->idMap.get();
+    extractSVSVamana(idMap);  // validate the handle really wraps an SVS index
+
+    if (context->deferralPending()) {
+        // The off-heap vector block is core-owned and reused per batch, so buffered vectors must be copied.
+        context->bufferedVectors.insert(context->bufferedVectors.end(), inputVectors->begin(), inputVectors->end());
+        for (int i = 0; i < numVectors; ++i) {
+            context->bufferedIds.push_back(static_cast<faiss::idx_t>(ids[i]));
+        }
+        if (context->bufferedIds.size() >= context->trainTarget) {
+            context->trainAndDrain();
+        }
+        return;
+    }
+
     idMap->add_with_ids(numVectors, inputVectors->data(), ids.data());
 }
 
@@ -272,10 +408,17 @@ void knn_jni::svs_wrapper::WriteIndex(knn_jni::JNIUtilInterface * jniUtil, JNIEn
     knn_jni::stream::NativeEngineIndexOutputMediator mediator {jniUtil, env, output};
     knn_jni::stream::FaissOpenSearchIOWriter writer {&mediator};
 
-    // The index is freed after writing (the build strategy creates it solely to write it).
-    std::unique_ptr<faiss::IndexIDMap> idMap(reinterpret_cast<faiss::IndexIDMap *>(indexAddressJ));
+    // The build context is freed after writing (the build strategy creates it solely to write it).
+    std::unique_ptr<SvsBuildContext> context(reinterpret_cast<SvsBuildContext *>(indexAddressJ));
+
+    // Defensive: if the vector stream ended before the training buffer filled (numDocs overcounted the
+    // actual live vectors), train on whatever arrived rather than writing an untrained index.
+    if (context->deferralPending()) {
+        context->trainAndDrain();
+    }
+
     try {
-        faiss::write_index(idMap.get(), &writer);
+        faiss::write_index(context->idMap.get(), &writer);
         writer.flush();
     } catch (std::exception &e) {
         throw std::runtime_error(std::string("Failed to write index to disk, error=") + e.what());
