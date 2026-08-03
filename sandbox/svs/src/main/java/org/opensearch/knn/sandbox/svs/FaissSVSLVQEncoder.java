@@ -85,7 +85,8 @@ public class FaissSVSLVQEncoder implements Encoder {
         }
     }
 
-    private static void validatePlatformSupportsLvq() {
+    // Package-private: the LeanVec encoder shares the LVQ platform gate (LeanVec storage is LVQ-backed).
+    static void validatePlatformSupportsLvq() {
         if (SvsService.isLvqLeanvecEnabled() == false) {
             throw new IllegalArgumentException(
                 String.format(

@@ -81,6 +81,87 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
         });
     }
 
+    // A tiny corpus sits far below the LeanVec rough training threshold, so this exercises the native
+    // LVQ-fallback rung of the deferred-training ladder end-to-end (build, write, load, search).
+    @SneakyThrows
+    public void testSVSVamana_withLeanVecEncoder_smallSegmentFallsBackToLvq_thenSucceed() {
+        runIndexSearchRoundtrip("test-svs-vamana-leanvec-fallback", SpaceType.L2, builder -> {
+            builder.startObject(PARAMETERS)
+                .field("degree", 64)
+                .startObject(METHOD_ENCODER_PARAMETER)
+                .field(NAME, "leanvec")
+                .startObject(PARAMETERS)
+                .field("primary_bits", 4)
+                .field("residual_bits", 8)
+                .endObject()
+                .endObject()
+                .endObject();
+        });
+    }
+
+    // Deferred LeanVec training end-to-end: flush-time segments stay below the (minimum allowed) 1000
+    // threshold and build as LVQ; the force-merge crosses it, so the merged segment buffers, trains the
+    // projection, drains, and serializes a real LeanVec index that then serves searches.
+    @SneakyThrows
+    public void testSVSVamana_withLeanVecDeferredTraining_forceMergeUpgrade_thenSucceed() {
+        final String indexName = "test-svs-vamana-leanvec-deferred";
+        final String fieldName = "test-field";
+        final int dimension = 8;
+        final int numDocs = 1200;
+        final int threshold = 1000;
+
+        XContentBuilder builder = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("properties")
+            .startObject(fieldName)
+            .field("type", "knn_vector")
+            .field("dimension", dimension)
+            .startObject(KNN_METHOD)
+            .field(NAME, SVS_VAMANA)
+            .field(METHOD_PARAMETER_SPACE_TYPE, SpaceType.L2.getValue())
+            .field(KNN_ENGINE, SVS_ENGINE)
+            .startObject(PARAMETERS)
+            .field("degree", 32)
+            .startObject(METHOD_ENCODER_PARAMETER)
+            .field(NAME, "leanvec")
+            .startObject(PARAMETERS)
+            .field("primary_bits", 4)
+            .field("residual_bits", 8)
+            .field("dimensions", 4)
+            .field("training_threshold", threshold)
+            .field("rough_training_threshold", threshold)
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject()
+            .endObject();
+
+        createKnnIndexAssumingEncoderSupport(indexName, builder.toString());
+
+        java.util.Random random = new java.util.Random(42);
+        float[][] docs = new float[numDocs][dimension];
+        for (int i = 0; i < numDocs; i++) {
+            for (int d = 0; d < dimension; d++) {
+                docs[i][d] = random.nextFloat();
+            }
+        }
+        bulkAddKnnDocs(indexName, fieldName, docs, numDocs);
+        refreshAllNonSystemIndices();
+        assertEquals(numDocs, getDocCount(indexName));
+
+        // The merged segment (1200 >= threshold) takes the deferred-training path.
+        forceMergeKnnIndex(indexName, 1);
+
+        int k = 10;
+        Response response = searchKNNIndex(indexName, new KNNQueryBuilder(fieldName, docs[0], k), k);
+        List<KNNResult> results = parseSearchResponse(EntityUtils.toString(response.getEntity()), fieldName);
+        assertEquals(k, results.size());
+
+        deleteKNNIndex(indexName);
+    }
+
     // Asserts the SVS search context accepts a query-time search_window_size method parameter.
     @SneakyThrows
     public void testSVSVamana_withSearchWindowSizeMethodParameter_thenSucceed() {

@@ -23,14 +23,19 @@
 namespace knn_jni {
     namespace svs_wrapper {
         // Create an empty SVS Vamana index from the parameters map (space type, index description, thread
-        // count, and the svs_vamana build parameters) and return the address of its IndexIDMap wrapper.
+        // count, and the svs_vamana build parameters) and return the address of its build context (which
+        // wraps the IndexIDMap). For LeanVec descriptions the build context drives deferred training:
+        // below the rough threshold the description is rewritten to the LVQ equivalent; otherwise the
+        // context buffers min(training_threshold, numDocs) vectors, trains the projection, then streams.
         jlong InitIndex(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env, jlong numDocs, jint dimJ, jobject parametersJ);
 
-        // Add the vectors at vectorsAddressJ (with the given ids) to the index created by InitIndex.
+        // Add the vectors at vectorsAddressJ (with the given ids) to the build context created by InitIndex
+        // (buffering them first when deferred LeanVec training is still pending).
         void InsertToIndex(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env, jintArray idsJ, jlong vectorsAddressJ,
                            jint dimJ, jlong indexAddressJ, jint threadCount);
 
-        // Serialize the index to the provided IndexOutputWithBuffer and free it.
+        // Serialize the built index to the provided IndexOutputWithBuffer and free the build context
+        // (training first if the deferred buffer never filled).
         void WriteIndex(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env, jobject output, jlong indexAddressJ);
 
         // Load an SVS index from a faiss IOReader; returns the address of the loaded index.
