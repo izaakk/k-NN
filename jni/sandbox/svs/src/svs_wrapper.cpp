@@ -508,12 +508,14 @@ jobjectArray knn_jni::svs_wrapper::QueryIndex_WithFilter(knn_jni::JNIUtilInterfa
     }
 
     faiss::SearchParametersSVSVamana svsVamanaParams;
-    // Query-time search_window_size supersedes the index-level value; buffer capacity tracks it when the
-    // index-level capacity is smaller (SVS requires capacity >= window).
+    // Query-time search_window_size / search_buffer_capacity supersede the index-level values; capacity is
+    // clamped to >= window (SVS requirement). For two-level encodings (LeanVec) capacity is the re-rank pool.
     svsVamanaParams.search_window_size = knn_jni::commons::getIntegerMethodParameter(
         env, jniUtil, methodParams, knn_jni::SEARCH_WINDOW_SIZE, svsVamanaReader->search_window_size);
+    svsVamanaParams.search_buffer_capacity = knn_jni::commons::getIntegerMethodParameter(
+        env, jniUtil, methodParams, knn_jni::SEARCH_BUFFER_CAPACITY, svsVamanaReader->search_buffer_capacity);
     svsVamanaParams.search_buffer_capacity = std::max(
-        static_cast<size_t>(svsVamanaReader->search_buffer_capacity), svsVamanaParams.search_window_size);
+        static_cast<size_t>(svsVamanaParams.search_buffer_capacity), svsVamanaParams.search_window_size);
 
     // The SVS runtime does not pad missing results with faiss's -1 sentinel; slots beyond the number of
     // results found would otherwise surface as label 0 / distance 0. Clamp k to the segment's vector count
