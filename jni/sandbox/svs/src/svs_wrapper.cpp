@@ -37,8 +37,10 @@
 #include <omp.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <jni.h>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -175,33 +177,79 @@ jobjectArray buildQueryResults(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env
 // paths never see it (they only receive addresses from LoadIndexWithStream, which stay raw faiss
 // indexes), and core never frees a build handle itself: WriteIndex owns the teardown.
 //
-// For deferred-training LeanVec builds, the handle additionally buffers the first
-// min(training_threshold, numDocs) vectors (copies: the core-owned off-heap block is reused per batch);
-// once the buffer is full the LeanVec projection trains on it, the buffer drains into the index, and all
-// later batches stream straight through. trainTarget == 0 means no deferral is pending (either a
-// train-free build, or training already happened).
+// For deferred-training LeanVec builds, the handle keeps a UNIFORM sample of the whole vector stream
+// (reservoir sampling, Algorithm R) sized min(training_threshold, numDocs) for the projection training,
+// and spills every (id, vector) record to an anonymous temp file. At write time the projection trains on
+// the reservoir and the spill replays into the index. A first-N sample is NOT acceptable here: the head
+// of a merged segment's stream can be distributionally skewed (measured 8x the stationary mean-drift on
+// cohere-10m), which caps recall regardless of search window. trainTarget == 0 means no deferral is
+// pending (train-free build, or training already happened).
 struct SvsBuildContext {
     std::unique_ptr<faiss::IndexIDMap> idMap;
     int dim = 0;
     size_t trainTarget = 0;
-    std::vector<float> bufferedVectors;
-    std::vector<faiss::idx_t> bufferedIds;
+    size_t seenCount = 0;
+    std::vector<float> reservoir;
+    std::FILE* spill = nullptr;
+    // Fixed seed: reproducible builds; sample uniformity does not need cryptographic randomness.
+    std::mt19937_64 rng{0x53565352u};
+
+    ~SvsBuildContext() {
+        if (spill != nullptr) {
+            std::fclose(spill);  // anonymous tmpfile: closing deletes it
+        }
+    }
 
     bool deferralPending() const { return trainTarget != 0; }
 
-    // Train the LeanVec projection on the first min(trainTarget, buffered) vectors, then drain the whole
-    // buffer into the index. Called when the buffer reaches trainTarget, or from WriteIndex if the vector
-    // stream ended early (defensive: numDocs overcounts should not starve training forever).
-    void trainAndDrain() {
-        size_t buffered = bufferedIds.size();
-        if (buffered == 0) {
-            throw std::runtime_error("Deferred LeanVec training reached the write phase with no vectors buffered");
+    // Spill the batch and fold it into the reservoir.
+    void appendBatch(const faiss::idx_t* ids, size_t n, const float* vectors) {
+        for (size_t i = 0; i < n; ++i) {
+            const float* vec = vectors + i * static_cast<size_t>(dim);
+            if (std::fwrite(&ids[i], sizeof(faiss::idx_t), 1, spill) != 1
+                || std::fwrite(vec, sizeof(float), dim, spill) != static_cast<size_t>(dim)) {
+                throw std::runtime_error("Failed to write to the LeanVec training spill file (disk full?)");
+            }
+            if (seenCount < trainTarget) {
+                std::copy(vec, vec + dim, reservoir.begin() + seenCount * static_cast<size_t>(dim));
+            } else {
+                size_t j = rng() % (seenCount + 1);
+                if (j < trainTarget) {
+                    std::copy(vec, vec + dim, reservoir.begin() + j * static_cast<size_t>(dim));
+                }
+            }
+            ++seenCount;
         }
-        size_t trainCount = std::min(trainTarget, buffered);
-        idMap->train(static_cast<faiss::idx_t>(trainCount), bufferedVectors.data());
-        idMap->add_with_ids(static_cast<faiss::idx_t>(buffered), bufferedVectors.data(), bufferedIds.data());
-        std::vector<float>().swap(bufferedVectors);
-        std::vector<faiss::idx_t>().swap(bufferedIds);
+    }
+
+    // Train the projection on the reservoir, then replay the spilled stream into the index.
+    void trainAndReplay() {
+        if (seenCount == 0) {
+            throw std::runtime_error("Deferred LeanVec training reached the write phase with no vectors seen");
+        }
+        size_t trainCount = std::min(trainTarget, seenCount);
+        idMap->train(static_cast<faiss::idx_t>(trainCount), reservoir.data());
+        std::vector<float>().swap(reservoir);
+
+        std::rewind(spill);
+        constexpr size_t CHUNK = 8192;
+        std::vector<float> vecChunk(CHUNK * static_cast<size_t>(dim));
+        std::vector<faiss::idx_t> idChunk(CHUNK);
+        size_t remaining = seenCount;
+        while (remaining > 0) {
+            size_t k = std::min(CHUNK, remaining);
+            for (size_t i = 0; i < k; ++i) {
+                if (std::fread(&idChunk[i], sizeof(faiss::idx_t), 1, spill) != 1
+                    || std::fread(vecChunk.data() + i * static_cast<size_t>(dim), sizeof(float), dim, spill)
+                           != static_cast<size_t>(dim)) {
+                    throw std::runtime_error("Failed to read back the LeanVec training spill file");
+                }
+            }
+            idMap->add_with_ids(static_cast<faiss::idx_t>(k), vecChunk.data(), idChunk.data());
+            remaining -= k;
+        }
+        std::fclose(spill);
+        spill = nullptr;
         trainTarget = 0;
     }
 };
@@ -343,8 +391,11 @@ jlong knn_jni::svs_wrapper::InitIndex(knn_jni::JNIUtilInterface * jniUtil, JNIEn
     context->dim = static_cast<int>(dimJ);
     if (!idMap->is_trained && trainTarget > 0) {
         context->trainTarget = trainTarget;
-        context->bufferedVectors.reserve(trainTarget * static_cast<size_t>(dimJ));
-        context->bufferedIds.reserve(trainTarget);
+        context->reservoir.resize(trainTarget * static_cast<size_t>(dimJ));
+        context->spill = std::tmpfile();
+        if (context->spill == nullptr) {
+            throw std::runtime_error("Failed to create the LeanVec training spill file");
+        }
     }
     context->idMap = std::move(idMap);
 
@@ -385,14 +436,8 @@ void knn_jni::svs_wrapper::InsertToIndex(knn_jni::JNIUtilInterface * jniUtil, JN
     extractSVSVamana(idMap);  // validate the handle really wraps an SVS index
 
     if (context->deferralPending()) {
-        // The off-heap vector block is core-owned and reused per batch, so buffered vectors must be copied.
-        context->bufferedVectors.insert(context->bufferedVectors.end(), inputVectors->begin(), inputVectors->end());
-        for (int i = 0; i < numVectors; ++i) {
-            context->bufferedIds.push_back(static_cast<faiss::idx_t>(ids[i]));
-        }
-        if (context->bufferedIds.size() >= context->trainTarget) {
-            context->trainAndDrain();
-        }
+        // The off-heap vector block is core-owned and reused per batch, so the spill/reservoir must copy.
+        context->appendBatch(ids.data(), static_cast<size_t>(numVectors), inputVectors->data());
         return;
     }
 
@@ -411,10 +456,10 @@ void knn_jni::svs_wrapper::WriteIndex(knn_jni::JNIUtilInterface * jniUtil, JNIEn
     // The build context is freed after writing (the build strategy creates it solely to write it).
     std::unique_ptr<SvsBuildContext> context(reinterpret_cast<SvsBuildContext *>(indexAddressJ));
 
-    // Defensive: if the vector stream ended before the training buffer filled (numDocs overcounted the
-    // actual live vectors), train on whatever arrived rather than writing an untrained index.
+    // Deferred LeanVec: the whole stream has arrived; train the projection on the uniform reservoir
+    // sample, then replay the spilled vectors into the freshly trained index.
     if (context->deferralPending()) {
-        context->trainAndDrain();
+        context->trainAndReplay();
     }
 
     try {
