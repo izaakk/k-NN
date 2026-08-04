@@ -45,6 +45,6 @@ public class SvsEngineProvider implements KNNEngineDefinition {
     public Set<String> engineSpecificQueryParameters() {
         // Parse-time allowlist for the engine's query method_parameters; the value rules live in
         // FaissSVSVamanaSearchContext, which KNNQueryBuilder#doToQuery validates against.
-        return Set.of(SVSConstants.METHOD_PARAMETER_SEARCH_WINDOW_SIZE);
+        return Set.of(SVSConstants.METHOD_PARAMETER_SEARCH_WINDOW_SIZE, SVSConstants.METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY);
     }
 }
