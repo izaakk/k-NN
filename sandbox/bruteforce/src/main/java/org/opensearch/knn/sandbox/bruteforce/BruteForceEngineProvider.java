@@ -5,6 +5,7 @@
 
 package org.opensearch.knn.sandbox.bruteforce;
 
+import org.opensearch.knn.index.engine.EngineQueryParameter;
 import org.opensearch.knn.index.engine.KNNEngineDefinition;
 import org.opensearch.knn.index.engine.KNNLibrary;
 import org.opensearch.knn.index.engine.NativeEngineService;
@@ -37,7 +38,7 @@ public final class BruteForceEngineProvider implements KNNEngineDefinition {
     }
 
     @Override
-    public Set<String> engineSpecificQueryParameters() {
-        return Set.of(SCAN_LIMIT);
+    public Set<EngineQueryParameter> engineSpecificQueryParameters() {
+        return Set.of(new EngineQueryParameter(SCAN_LIMIT, EngineQueryParameter.ValueType.INTEGER));
     }
 }
