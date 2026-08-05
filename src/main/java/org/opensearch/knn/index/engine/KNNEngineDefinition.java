@@ -55,21 +55,22 @@ public interface KNNEngineDefinition {
     }
 
     /**
-     * Query-time {@code method_parameters} names this engine contributes (for example {@code search_window_size}),
-     * beyond the core-known names in {@code org.opensearch.knn.index.query.request.MethodParameter}. This is a
-     * parse-time allowlist only: it tells the REST/gRPC layers not to reject the name, so the engine-aware
-     * validation in {@code KNNQueryBuilder#doToQuery} (against the engine's {@link KNNLibrarySearchContext})
-     * can judge the value. Names, not semantics — the search context remains the validation authority, so a
-     * name declared here but absent from the search context is accepted at parse and then rejected there,
-     * never silently honored.
+     * Query-time {@code method_parameters} this engine contributes (for example {@code search_window_size}),
+     * each a name plus a value type, beyond the core-known names in
+     * {@code org.opensearch.knn.index.query.request.MethodParameter}. Names are matched case sensitively.
+     * These declarations are data only, the parse layer type checks values with core code and never runs
+     * engine code. The engine's search context stays the validation authority at query time, so a value that
+     * passes the type check is still judged against {@code KNNQueryBuilder#doToQuery}. A misdeclared set (null,
+     * null entries, blank names, or duplicate names within this engine) causes the whole engine to be skipped,
+     * like any other misconfiguration.
      *
      * <p>The same class-initialization rule as {@link #nativeService()} applies: do not touch
      * {@code KNNEngine} statics from this method.
      *
-     * @return the engine-specific query parameter names; empty (the default) if the engine's query-time
+     * @return the engine-specific query parameters; empty (the default) if the engine's query-time
      *         parameters are all core-known
      */
-    default Set<String> engineSpecificQueryParameters() {
+    default Set<EngineQueryParameter> engineSpecificQueryParameters() {
         return Set.of();
     }
 

@@ -57,10 +57,14 @@ public final class KNNEngine implements KNNLibrary, VectorSearchEngine {
     private static final List<KNNEngine> BUILT_INS = List.of(NMSLIB, FAISS, LUCENE, UNDEFINED);
 
     /** One immutable snapshot of built-ins plus every registered engine, swapped once when discovery runs. */
-    private record EngineTable(Map<String, KNNEngine> byName, KNNEngine[] all, Set<KNNEngine> customSegmentFileEngines, Set<
-        String> engineContributedQueryParameters) {
+    private record EngineTable(Map<String, KNNEngine> byName, KNNEngine[] all, Set<KNNEngine> customSegmentFileEngines, Map<
+        String,
+        Set<EngineQueryParameter.ValueType>> engineContributedQueryParameters) {
 
-        static EngineTable of(Map<String, KNNEngine> byName, Set<String> engineContributedQueryParameters) {
+        static EngineTable of(
+            Map<String, KNNEngine> byName,
+            Map<String, Set<EngineQueryParameter.ValueType>> engineContributedQueryParameters
+        ) {
             final ImmutableSet.Builder<KNNEngine> customFiles = ImmutableSet.builder();
             for (KNNEngine engine : byName.values()) {
                 if (engine.createsCustomSegmentFiles()) {
@@ -71,14 +75,14 @@ public final class KNNEngine implements KNNLibrary, VectorSearchEngine {
                 java.util.Collections.unmodifiableMap(byName),
                 byName.values().toArray(new KNNEngine[0]),
                 customFiles.build(),
-                Set.copyOf(engineContributedQueryParameters)
+                Map.copyOf(engineContributedQueryParameters)
             );
         }
     }
 
     // Discovery runs from KNNPlugin#createComponents in production, which hands definitions the node
     // services. Tests and tools that never construct the plugin discover lazily on first use.
-    private static volatile EngineTable TABLE = EngineTable.of(builtInsByName(), Set.of());
+    private static volatile EngineTable TABLE = EngineTable.of(builtInsByName(), Map.of());
     private static volatile boolean DISCOVERY_ATTEMPTED = false;
     // True only while a discovery pass runs. Volatile so a lookup during the pass serves the built-ins
     // snapshot instead of waiting on the lock, and so a definition that calls back into KNNEngine from
@@ -124,7 +128,7 @@ public final class KNNEngine implements KNNLibrary, VectorSearchEngine {
                         )
                     );
                 }
-                TABLE = EngineTable.of(byName, discovery.queryParameterNames());
+                TABLE = EngineTable.of(byName, discovery.queryParameterTypes());
             } finally {
                 DISCOVERING = false;
                 DISCOVERY_ATTEMPTED = true;
@@ -266,17 +270,31 @@ public final class KNNEngine implements KNNLibrary, VectorSearchEngine {
     /**
      * Whether a registered engine has declared this query-time method parameter name (see
      * {@link KNNEngineDefinition#engineSpecificQueryParameters()}). The REST/gRPC parse layers use this to
-     * defer — rather than reject — a name unknown to the core {@code MethodParameter} enum, so the
-     * engine-aware validation in {@code KNNQueryBuilder#doToQuery} can judge it against the engine's
-     * {@link KNNLibrarySearchContext}. Matching is exact (case-sensitive), mirroring
-     * {@code MethodParameter.enumOf}.
+     * defer a name unknown to the core {@code MethodParameter} enum. Matching is exact (case-sensitive),
+     * mirroring {@code MethodParameter.enumOf}.
      *
      * @param name the method parameter name from the query
      * @return true if a registered engine declared the name; false otherwise
      */
     @ExperimentalApi
     public static boolean isEngineContributedQueryParameter(String name) {
-        return name != null && table().engineContributedQueryParameters().contains(name);
+        return name != null && table().engineContributedQueryParameters().containsKey(name);
+    }
+
+    /**
+     * The value types every registered engine declared for this query-time method parameter name, unioned
+     * across engines. Empty when no engine declared the name. The parse layer type checks a request value
+     * against this set (see {@link EngineQueryParameter#matches}).
+     *
+     * @param name the method parameter name from the query
+     * @return the declared value types, empty if the name is undeclared
+     */
+    @ExperimentalApi
+    public static Set<EngineQueryParameter.ValueType> engineContributedQueryParameterTypes(String name) {
+        if (name == null) {
+            return Set.of();
+        }
+        return table().engineContributedQueryParameters().getOrDefault(name, Set.of());
     }
 
     /**

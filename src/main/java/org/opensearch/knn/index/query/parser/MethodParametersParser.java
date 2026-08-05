@@ -21,6 +21,7 @@ import org.opensearch.core.common.io.stream.StreamOutput;
 import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.knn.common.KNNConstants;
+import org.opensearch.knn.index.engine.EngineQueryParameter;
 import org.opensearch.knn.index.engine.KNNEngine;
 import org.opensearch.knn.index.query.request.MethodParameter;
 
@@ -30,6 +31,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 import static org.opensearch.knn.index.query.KNNQueryBuilder.METHOD_PARAMS_FIELD;
@@ -42,6 +44,27 @@ import static org.opensearch.knn.index.query.KNNQueryBuilder.NAME;
 @Getter
 @AllArgsConstructor
 public class MethodParametersParser {
+
+    /**
+     * Error message for a declared engine parameter whose value matches no
+     * declaring engine's type, null when the value is acceptable. Callers
+     * already know the name is engine contributed.
+     */
+    public static String engineTypeError(String name, Object value) {
+        final Set<EngineQueryParameter.ValueType> types = KNNEngine.engineContributedQueryParameterTypes(name);
+        for (EngineQueryParameter.ValueType type : types) {
+            if (EngineQueryParameter.matches(type, value)) {
+                return null;
+            }
+        }
+        return "parameter ["
+            + name
+            + "] expects "
+            + types
+            + " but got ["
+            + (value == null ? "null" : value.getClass().getSimpleName())
+            + "]";
+    }
 
     // Validation on rest layer
     public static ValidationException validateMethodParameters(final Map<String, ?> methodParameters) {
@@ -56,6 +79,11 @@ public class MethodParametersParser {
             } else if (!KNNEngine.isEngineContributedQueryParameter(methodParameter.getKey())) {
                 // Should never happen if used in the right sequence
                 errors.add(methodParameter.getKey() + " is not a valid method parameter");
+            } else {
+                final String typeError = engineTypeError(methodParameter.getKey(), methodParameter.getValue());
+                if (typeError != null) {
+                    errors.add(typeError);
+                }
             }
         }
 
@@ -161,7 +189,12 @@ public class MethodParametersParser {
             final MethodParameter parameter = MethodParameter.enumOf(name);
             if (parameter == null) {
                 if (KNNEngine.isEngineContributedQueryParameter(name)) {
-                    // Engine-declared name: pass the raw value through; engine-aware validation runs in KNNQueryBuilder#doToQuery
+                    // Engine-declared name: type check with core data, then pass the raw value through;
+                    // engine-aware value validation runs in KNNQueryBuilder#doToQuery
+                    final String typeError = engineTypeError(name, value);
+                    if (typeError != null) {
+                        throw new ParsingException(parser.getTokenLocation(), typeError);
+                    }
                     methodParameters.put(name, value);
                     continue;
                 }

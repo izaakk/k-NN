@@ -6,6 +6,8 @@
 package org.opensearch.knn.sandbox.fixture;
 
 import org.opensearch.knn.index.SpaceType;
+import org.opensearch.knn.index.engine.EngineQueryParameter;
+import org.opensearch.knn.index.engine.EngineQueryParameter.ValueType;
 import org.opensearch.knn.index.engine.KNNEngineDefinition;
 import org.opensearch.knn.index.engine.KNNLibrary;
 import org.opensearch.knn.index.engine.KNNMethod;
@@ -20,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * A second, pure-JVM-flagged fixture engine used to prove per-engine dispatch isolation: calls to one
@@ -80,5 +83,10 @@ public final class SecondaryFixtureEngineProvider implements KNNEngineDefinition
     @Override
     public NativeEngineService nativeService() {
         return SERVICE;
+    }
+
+    @Override
+    public Set<EngineQueryParameter> engineSpecificQueryParameters() {
+        return Set.of(new EngineQueryParameter("collide_param", ValueType.STRING));
     }
 }

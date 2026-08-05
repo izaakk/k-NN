@@ -11,6 +11,7 @@ import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.knn.index.engine.KNNEngine;
 import org.opensearch.knn.index.query.KNNQueryBuilder;
 import org.opensearch.knn.index.query.parser.KNNQueryBuilderParser;
+import org.opensearch.knn.index.query.parser.MethodParametersParser;
 import org.opensearch.knn.index.query.request.MethodParameter;
 import org.opensearch.knn.index.query.rescore.RescoreContext;
 import org.opensearch.transport.grpc.spi.QueryBuilderProtoConverterRegistry;
@@ -142,7 +143,12 @@ public class KNNQueryBuilderProtoUtils {
             MethodParameter parameter = MethodParameter.enumOf(name);
             if (parameter == null) {
                 if (KNNEngine.isEngineContributedQueryParameter(name)) {
-                    // Engine-declared name: defer to the engine-aware validation in KNNQueryBuilder#doToQuery
+                    // Engine-declared name: type check with core data, then defer value validation to
+                    // KNNQueryBuilder#doToQuery
+                    String typeError = MethodParametersParser.engineTypeError(name, value);
+                    if (typeError != null) {
+                        throw new IllegalArgumentException(typeError);
+                    }
                     processedMethodParameters.put(name, value);
                     continue;
                 }

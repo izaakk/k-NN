@@ -84,6 +84,60 @@ public class FixtureQueryParamDeferralTests extends OpenSearchTestCase {
         }
     }
 
+    public void testWrongTypeIsRejectedAtParse() throws Exception {
+        // fixture_window is declared INTEGER; a string value is a type error caught at the REST parse layer.
+        XContentBuilder builder = XContentFactory.jsonBuilder().startObject().field(METHOD_PARAMETER_FIXTURE_WINDOW, "abc").endObject();
+        try (XContentParser parser = createParser(builder)) {
+            ParsingException e = expectThrows(ParsingException.class, () -> MethodParametersParser.fromXContent(parser));
+            assertTrue(e.getMessage().contains("expects"));
+        }
+    }
+
+    public void testNullValueIsRejectedAtParse() throws Exception {
+        // An explicit null never matches any type, so a declared name with a null value fails at parse.
+        XContentBuilder builder = XContentFactory.jsonBuilder().startObject().nullField(METHOD_PARAMETER_FIXTURE_WINDOW).endObject();
+        try (XContentParser parser = createParser(builder)) {
+            ParsingException e = expectThrows(ParsingException.class, () -> MethodParametersParser.fromXContent(parser));
+            assertTrue(e.getMessage().contains("expects"));
+        }
+    }
+
+    public void testCollisionUnionAcceptsEitherDeclaredType() throws Exception {
+        // collide_param is INTEGER for the fixture engine and STRING for the secondary. Parse accepts a
+        // value matching either declared type and rejects one matching neither.
+        XContentBuilder asInt = XContentFactory.jsonBuilder().startObject().field("collide_param", 5).endObject();
+        try (XContentParser parser = createParser(asInt)) {
+            final Map<String, ?> parsed = MethodParametersParser.fromXContent(parser);
+            assertEquals(5, parsed.get("collide_param"));
+        }
+        XContentBuilder asString = XContentFactory.jsonBuilder().startObject().field("collide_param", "text").endObject();
+        try (XContentParser parser = createParser(asString)) {
+            final Map<String, ?> parsed = MethodParametersParser.fromXContent(parser);
+            assertEquals("text", parsed.get("collide_param"));
+        }
+        XContentBuilder asBool = XContentFactory.jsonBuilder().startObject().field("collide_param", true).endObject();
+        try (XContentParser parser = createParser(asBool)) {
+            expectThrows(ParsingException.class, () -> MethodParametersParser.fromXContent(parser));
+        }
+    }
+
+    public void testRightTypeStillDefersToTheEngine() throws Exception {
+        // A value of the declared type passes parse with its raw value preserved, deferring value validation
+        // to the engine at query time.
+        XContentBuilder builder = XContentFactory.jsonBuilder().startObject().field(METHOD_PARAMETER_FIXTURE_WINDOW, 32).endObject();
+        try (XContentParser parser = createParser(builder)) {
+            final Map<String, ?> parsed = MethodParametersParser.fromXContent(parser);
+            assertEquals(32, parsed.get(METHOD_PARAMETER_FIXTURE_WINDOW));
+        }
+    }
+
+    public void testValidateMethodParametersRejectsWrongType() {
+        // The same type gate runs in preliminary validation, returning a non-null ValidationException.
+        ValidationException wrongType = MethodParametersParser.validateMethodParameters(Map.of(METHOD_PARAMETER_FIXTURE_WINDOW, "abc"));
+        assertNotNull(wrongType);
+        assertTrue(wrongType.getMessage().contains("expects"));
+    }
+
     public void testEngineParameterIsRejectedOnAnotherEnginesQuery() {
         // fixture_window passes parse because the fixture engine declared it, but a query against a faiss
         // field validates against faiss's search context at doToQuery and must be rejected there. Pins

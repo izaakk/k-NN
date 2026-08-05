@@ -6,11 +6,13 @@
 package org.opensearch.knn.sandbox.fixture;
 
 import org.opensearch.knn.index.VectorQueryType;
+import org.opensearch.knn.index.engine.EngineQueryParameter.ValueType;
 import org.opensearch.knn.index.engine.KNNEngine;
 import org.opensearch.knn.index.engine.model.QueryContext;
 import org.opensearch.test.OpenSearchTestCase;
 
 import java.util.Arrays;
+import java.util.Set;
 
 import static org.opensearch.knn.sandbox.fixture.FixtureConstants.BAD_FIXTURE_ENGINE_NAME;
 import static org.opensearch.knn.sandbox.fixture.FixtureConstants.FIXTURE_ENGINE_NAME;
@@ -172,6 +174,22 @@ public class FixtureEngineRegistrationTests extends OpenSearchTestCase {
         assertSame(KNNEngine.LUCENE, KNNEngine.getEngine("lucene"));
         assertSame(KNNEngine.NMSLIB, KNNEngine.getEngine("nmslib"));
         assertSame(KNNEngine.UNDEFINED, KNNEngine.getEngine("undefined"));
+    }
+
+    public void testMisdeclaredQueryParametersSkipTheEngine() {
+        // The misdeclared-param fixture declares one name twice, a within-engine duplicate. The registry
+        // skips it at validation, so it never appears and its initialize never runs.
+        KNNEngine.getEngine(FIXTURE_ENGINE_NAME); // ensure discovery ran
+        assertTrue(Arrays.stream(KNNEngine.values()).noneMatch(engine -> "misdeclared-param".equals(engine.getName())));
+        assertFalse(MisdeclaredParamFixtureEngineProvider.initialized);
+    }
+
+    public void testDeclaredParameterTypesAreVisible() {
+        KNNEngine.getEngine(FIXTURE_ENGINE_NAME); // ensure discovery ran
+        assertEquals(Set.of(ValueType.INTEGER), KNNEngine.engineContributedQueryParameterTypes(METHOD_PARAMETER_FIXTURE_WINDOW));
+        // collide_param is declared INTEGER by the fixture engine and STRING by the secondary, unioned.
+        assertEquals(Set.of(ValueType.INTEGER, ValueType.STRING), KNNEngine.engineContributedQueryParameterTypes("collide_param"));
+        assertEquals(Set.of(), KNNEngine.engineContributedQueryParameterTypes("totally_unknown_param"));
     }
 
     public void testEngineExposesItsSearchContext() {

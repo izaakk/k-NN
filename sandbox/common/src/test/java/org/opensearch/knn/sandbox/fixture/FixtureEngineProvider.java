@@ -5,6 +5,8 @@
 
 package org.opensearch.knn.sandbox.fixture;
 
+import org.opensearch.knn.index.engine.EngineQueryParameter;
+import org.opensearch.knn.index.engine.EngineQueryParameter.ValueType;
 import org.opensearch.knn.index.engine.KNNEngineContext;
 import org.opensearch.knn.index.engine.KNNEngineDefinition;
 import org.opensearch.knn.index.engine.KNNLibrary;
@@ -47,7 +49,10 @@ public final class FixtureEngineProvider implements KNNEngineDefinition {
     }
 
     @Override
-    public Set<String> engineSpecificQueryParameters() {
-        return Set.of(FixtureConstants.METHOD_PARAMETER_FIXTURE_WINDOW);
+    public Set<EngineQueryParameter> engineSpecificQueryParameters() {
+        return Set.of(
+            new EngineQueryParameter(FixtureConstants.METHOD_PARAMETER_FIXTURE_WINDOW, ValueType.INTEGER),
+            new EngineQueryParameter("collide_param", ValueType.INTEGER)
+        );
     }
 }

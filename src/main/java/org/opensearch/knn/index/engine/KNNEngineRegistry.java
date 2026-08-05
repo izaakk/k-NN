@@ -18,6 +18,8 @@ import java.util.Iterator;
 import java.util.ServiceConfigurationError;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -58,8 +60,8 @@ final class KNNEngineRegistry {
      * The capabilities and extension are read once during validation and cached here, so no later step has
      * to call back into plugin code.
      */
-    record RegisteredEngine(String engineName, KNNLibrary library, NativeEngineService nativeService, Set<String> queryParameterNames,
-        EngineCapabilities capabilities, String extension, String compoundExtension) {
+    record RegisteredEngine(String engineName, KNNLibrary library, NativeEngineService nativeService, Set<
+        EngineQueryParameter> queryParameters, EngineCapabilities capabilities, String extension, String compoundExtension) {
     }
 
     /** A validated candidate plus its definition, so initialize runs only for engines that register. */
@@ -67,7 +69,7 @@ final class KNNEngineRegistry {
     }
 
     /** The outcome of one discovery pass over the classpath. */
-    record DiscoveryResult(Collection<RegisteredEngine> engines, Set<String> queryParameterNames) {
+    record DiscoveryResult(Collection<RegisteredEngine> engines, Map<String, Set<EngineQueryParameter.ValueType>> queryParameterTypes) {
     }
 
     /**
@@ -113,6 +115,11 @@ final class KNNEngineRegistry {
                     log.warn("KNNEngineDefinition [{}] returned a null library; ignoring", definition.getClass().getName());
                     continue;
                 }
+                final Set<EngineQueryParameter> queryParameters = validatedQueryParameters(definition);
+                if (queryParameters == null) {
+                    // Misdeclared query parameters are an engine-level skip, same policy as the other validations here.
+                    continue;
+                }
                 final EngineCapabilities capabilities = new EngineCapabilities(
                     library.supportsIterativeBuild(),
                     library.createsCustomSegmentFiles(),
@@ -124,7 +131,7 @@ final class KNNEngineRegistry {
                     name,
                     library,
                     definition.nativeService(),
-                    Set.copyOf(definition.engineSpecificQueryParameters()),
+                    queryParameters,
                     capabilities,
                     capabilities.customSegmentFiles() ? library.getExtension() : null,
                     capabilities.customSegmentFiles() ? library.getCompoundExtension() : null
@@ -145,7 +152,7 @@ final class KNNEngineRegistry {
         // A duplicate name is always a misconfiguration; dropping every claimant keeps the outcome
         // deterministic regardless of classpath order.
         final Map<String, RegisteredEngine> byName = new LinkedHashMap<>();
-        final Set<String> queryParameterNames = new HashSet<>();
+        final Map<String, EnumSet<EngineQueryParameter.ValueType>> queryParameterTypes = new HashMap<>();
         final Set<String> reservedExtensions = new HashSet<>(ENGINE_SEGMENT_FILES_EXTENSIONS);
         for (Map.Entry<String, List<Candidate>> entry : candidatesByName.entrySet()) {
             if (entry.getValue().size() > 1) {
@@ -171,9 +178,46 @@ final class KNNEngineRegistry {
                 continue;
             }
             byName.put(entry.getKey(), engine);
-            queryParameterNames.addAll(engine.queryParameterNames());
+            for (EngineQueryParameter parameter : engine.queryParameters()) {
+                queryParameterTypes.computeIfAbsent(parameter.name(), k -> EnumSet.noneOf(EngineQueryParameter.ValueType.class))
+                    .add(parameter.type());
+            }
         }
-        return new DiscoveryResult(Collections.unmodifiableCollection(byName.values()), Collections.unmodifiableSet(queryParameterNames));
+        // EnumSet is mutable, so copy each value to an immutable set before it leaves this method.
+        final Map<String, Set<EngineQueryParameter.ValueType>> immutableTypes = new HashMap<>();
+        for (Map.Entry<String, EnumSet<EngineQueryParameter.ValueType>> entry : queryParameterTypes.entrySet()) {
+            immutableTypes.put(entry.getKey(), Set.copyOf(entry.getValue()));
+        }
+        return new DiscoveryResult(Collections.unmodifiableCollection(byName.values()), Collections.unmodifiableMap(immutableTypes));
+    }
+
+    /**
+     * Reads and validates an engine's declared query parameters. Returns an immutable copy, or null when the
+     * set is misdeclared (null set, null entry, null or blank name, null type, or two entries sharing a name
+     * within this engine), which the caller treats as an engine-level skip.
+     */
+    private static Set<EngineQueryParameter> validatedQueryParameters(KNNEngineDefinition definition) {
+        final Set<EngineQueryParameter> declared = definition.engineSpecificQueryParameters();
+        if (declared == null) {
+            log.warn("KNNEngineDefinition [{}] returned a null query parameter set; ignoring", definition.getClass().getName());
+            return null;
+        }
+        final Set<String> seenNames = new HashSet<>();
+        for (EngineQueryParameter parameter : declared) {
+            if (parameter == null || parameter.name() == null || parameter.name().isBlank() || parameter.type() == null) {
+                log.warn("KNNEngineDefinition [{}] declared a malformed query parameter; ignoring", definition.getClass().getName());
+                return null;
+            }
+            if (seenNames.add(parameter.name()) == false) {
+                log.warn(
+                    "KNNEngineDefinition [{}] declared query parameter name [{}] more than once; ignoring",
+                    definition.getClass().getName(),
+                    parameter.name()
+                );
+                return null;
+            }
+        }
+        return Set.copyOf(declared);
     }
 
     /**
