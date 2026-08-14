@@ -23,6 +23,7 @@ include ":remote-index-build-client"
 // never pass the flag) — see sandbox/README.md.
 if (providers.gradleProperty('knn.sandbox.enabled').getOrElse('false') == 'true') {
     include ":sandbox"
+    include ":sandbox:bruteforce"
     new File(rootProject.projectDir, 'sandbox').eachDir { dir ->
         if (new File(dir, 'build.gradle').exists()) {
             include ":sandbox:${dir.name}"
