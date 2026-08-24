@@ -16,7 +16,7 @@
 include(${KNN_SANDBOX_TENANT_DIR}/cmake/fetch-svs-runtime.cmake)
 
 knn_sandbox_vendor_faiss(svs_faiss
-    GIT_TAG 67f066f7a02f76d3178baccf4c31b4839ff0fee8
+    GIT_TAG 124bfa1d4f9f8f3b114bf9da602941d815248e07
     CMAKE_ARGS
         -DFAISS_ENABLE_SVS=ON
         -DCMAKE_PREFIX_PATH=${SVS_RUNTIME_PREFIX}

@@ -5,6 +5,15 @@ encoders `flat` / `sq` (fp16, sq8) / `lvq` (4x0, 4x4, 4x8). Built entirely on th
 points, with zero core code. See `sandbox/README.md` for the extension-point contract and gating; this
 file documents tenant-specific behavior a user or reviewer needs to know.
 
+## Index build
+
+Every segment is built as a **static** SVS Vamana index (`IndexSVSVamana::is_static`): OpenSearch
+segments are write-once, so the JNI layer buffers the segment's vector stream and hands it to the
+runtime in a single one-shot add at write time. The dynamic SVS index is never used. Note for
+upgrades within the sandbox's experimental life: the vendored faiss pin that introduced static
+support also extended the SVS serialization format, so `.svs` segments written by older sandbox
+builds are not readable by this one (reindex required).
+
 ## Search surface
 
 - **Top-k kNN** with optional efficient pre-filtering, and query-time `method_parameters`:
