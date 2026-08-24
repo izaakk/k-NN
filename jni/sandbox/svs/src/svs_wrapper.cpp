@@ -38,6 +38,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
+#include <fstream>
 #include <jni.h>
 #include <memory>
 #include <numeric>
@@ -185,6 +187,40 @@ jobjectArray buildQueryResults(knn_jni::JNIUtilInterface * jniUtil, JNIEnv * env
 // acceptable there: the head of a merged segment's stream can be distributionally skewed (measured 8x
 // the stationary mean-drift on cohere-10m), which caps recall regardless of search window.
 // trainTarget == 0 means no training is pending (train-free build).
+// Benchmark-only OOD knob: when this env var names an fvecs file, deferred LeanVec training runs
+// train_with_queries with the file's vectors as the query sample (out-of-distribution LeanVec,
+// arXiv:2312.16335). Operator-level on purpose: a mapping-supplied node-local path would be a
+// security smell, and a benchmark rig wants one switch per node. Every failure is fatal so a
+// misconfigured rig cannot silently fall back to in-distribution training.
+constexpr const char* OOD_QUERY_FILE_ENV_VAR = "KNN_SVS_OOD_QUERY_FILE";
+
+// Reads an fvecs file (per vector: little-endian int32 dim + dim float32s), enforcing that every
+// record matches the index dimensionality.
+std::vector<float> readFvecsFile(const char* path, size_t expectedDim) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error(std::string("Cannot open the OOD query file: ") + path);
+    }
+    std::vector<float> queryVectors;
+    int32_t d = 0;
+    while (in.read(reinterpret_cast<char*>(&d), sizeof(d))) {
+        if (d <= 0 || static_cast<size_t>(d) != expectedDim) {
+            throw std::runtime_error(
+                "OOD query file dimension " + std::to_string(d) + " does not match the index dimension "
+                + std::to_string(expectedDim) + ": " + path);
+        }
+        size_t offset = queryVectors.size();
+        queryVectors.resize(offset + expectedDim);
+        if (!in.read(reinterpret_cast<char*>(queryVectors.data() + offset), expectedDim * sizeof(float))) {
+            throw std::runtime_error(std::string("Truncated OOD query file: ") + path);
+        }
+    }
+    if (queryVectors.empty()) {
+        throw std::runtime_error(std::string("OOD query file contains no vectors: ") + path);
+    }
+    return queryVectors;
+}
+
 // Tiny deterministic PRNG (splitmix64). std::mt19937_64 emits an out-of-line libstdc++ template
 // instantiation whose visibility is forced to default by the std namespace attribute, leaking a stray
 // dynamic symbol from this otherwise symbol-clean library (the S14a isolation check).
@@ -232,7 +268,22 @@ struct SvsBuildContext {
             for (size_t i = 0; i < trainCount; ++i) {
                 std::copy_n(vectors.data() + rows[i] * d, d, sample.data() + i * d);
             }
-            idMap->train(static_cast<faiss::idx_t>(trainCount), sample.data());
+            const char* oodQueryFile = std::getenv(OOD_QUERY_FILE_ENV_VAR);
+            if (oodQueryFile != nullptr && oodQueryFile[0] != '\0') {
+                std::vector<float> queries = readFvecsFile(oodQueryFile, d);
+                size_t numQueries = queries.size() / d;
+                std::cerr << "[KNN-SVS] OOD LeanVec training: " << numQueries << " query vectors from "
+                          << oodQueryFile << "\n";
+                // IndexIDMap does not forward train_with_queries (the faiss::Index base version is a
+                // silent no-op), so the inner index is trained directly and the wrapper's trained flag
+                // synced by hand, mirroring IndexIDMap::train.
+                extractSVSVamana(idMap.get())->train_with_queries(
+                    static_cast<faiss::idx_t>(trainCount), sample.data(),
+                    static_cast<faiss::idx_t>(numQueries), queries.data());
+                idMap->is_trained = idMap->index->is_trained;
+            } else {
+                idMap->train(static_cast<faiss::idx_t>(trainCount), sample.data());
+            }
             trainTarget = 0;
         }
         idMap->add_with_ids(static_cast<faiss::idx_t>(ids.size()), vectors.data(), ids.data());

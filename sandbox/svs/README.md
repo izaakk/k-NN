@@ -14,6 +14,17 @@ upgrades within the sandbox's experimental life: the vendored faiss pin that int
 support also extended the SVS serialization format, so `.svs` segments written by older sandbox
 builds are not readable by this one (reindex required).
 
+### OOD LeanVec training (benchmark-only)
+
+Setting the environment variable `KNN_SVS_OOD_QUERY_FILE` on a data node to the path of an
+fvecs file makes every deferred LeanVec training on that node run out-of-distribution training
+(`train_with_queries`, arXiv:2312.16335) with the file's vectors as the query sample. This is a
+node-level benchmarking knob, not a product surface: any problem with the file (missing,
+truncated, dimension mismatch, empty) fails the segment build loudly rather than silently
+falling back to in-distribution training, and the node log records
+`[KNN-SVS] OOD LeanVec training: <n> query vectors from <path>` when the path is taken.
+The query sample used for training must be disjoint from the queries used to evaluate recall.
+
 ## Search surface
 
 - **Top-k kNN** with optional efficient pre-filtering, and query-time `method_parameters`:
