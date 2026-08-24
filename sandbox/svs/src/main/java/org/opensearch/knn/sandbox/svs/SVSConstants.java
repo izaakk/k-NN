@@ -38,9 +38,10 @@ public final class SVSConstants {
     public static final String FAISS_SVS_SQ_TYPE_FP16 = "fp16";
     public static final String FAISS_SVS_SQ_TYPE_SQ8 = "sq8";
 
-    // Faiss index-factory descriptions emitted per sq type.
+    // Faiss index-factory descriptions emitted per sq type. Faiss renamed SQI8 to SQ8 upstream
+    // (facebookresearch/faiss#5337); the vendored pin is past that rename.
     public static final String FAISS_SVS_SQ_FP16_DESCRIPTION = "FP16";
-    public static final String FAISS_SVS_SQ_SQ8_DESCRIPTION = "SQI8";
+    public static final String FAISS_SVS_SQ_SQ8_DESCRIPTION = "SQ8";
 
     // Vamana method parameters
     public static final String METHOD_PARAMETER_DEGREE = "degree";
