@@ -5,6 +5,9 @@
 
 package org.opensearch.knn.sandbox.svs;
 
+import org.opensearch.knn.common.KNNConstants;
+import org.opensearch.knn.index.engine.ParameterKey;
+
 /**
  * SVS-specific constants used by the sandbox SVS engine classes.
  *
@@ -67,4 +70,7 @@ public final class SVSConstants {
 
     // Default construction window size (mirrors main KNNSettings default in 3.4-era code).
     public static final int DEFAULT_CONSTRUCTION_WINDOW_SIZE = 128;
+
+    // Typed key for the core-provided index thread quantity inside EngineParameters.
+    public static final ParameterKey<Integer> INDEX_THREAD_QTY_KEY = ParameterKey.intKey(KNNConstants.INDEX_THREAD_QTY);
 }

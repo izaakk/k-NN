@@ -8,9 +8,15 @@ package org.opensearch.knn.sandbox.svs;
 import org.opensearch.knn.index.SpaceType;
 import org.opensearch.knn.index.VectorDataType;
 import org.opensearch.knn.index.engine.Encoder;
+import org.opensearch.knn.index.engine.KNNLibraryIndexingContext;
+import org.opensearch.knn.index.engine.KNNLibraryIndexingContextImpl;
+import org.opensearch.knn.index.engine.KNNMethodConfigContext;
+import org.opensearch.knn.index.engine.KNNMethodContext;
 import org.opensearch.knn.index.engine.MethodComponent;
 import org.opensearch.knn.index.engine.MethodComponentContext;
 import org.opensearch.knn.index.engine.Parameter;
+import org.opensearch.knn.index.engine.ResolvedIndexSpec;
+import org.opensearch.knn.index.mapper.Mode;
 import org.opensearch.knn.index.engine.faiss.AbstractFaissMethod;
 import org.opensearch.knn.index.engine.faiss.FaissFlatEncoder;
 
@@ -23,6 +29,8 @@ import java.util.stream.Collectors;
 
 import static org.opensearch.knn.common.KNNConstants.ENCODER_FLAT;
 import static org.opensearch.knn.common.KNNConstants.ENCODER_SQ;
+import static org.opensearch.knn.common.KNNConstants.SPACE_TYPE;
+import static org.opensearch.knn.common.KNNConstants.VECTOR_DATA_TYPE_FIELD;
 import static org.opensearch.knn.common.KNNConstants.FAISS_FLAT_DESCRIPTION;
 import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
 import static org.opensearch.knn.sandbox.svs.SVSConstants.DEFAULT_CONSTRUCTION_WINDOW_SIZE;
@@ -63,6 +71,85 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
 
     public FaissSVSVamanaMethod() {
         super(METHOD_COMPONENT, Set.copyOf(SUPPORTED_SPACES), new FaissSVSVamanaSearchContext());
+    }
+
+    /**
+     * The {@code AbstractKNNMethod} default resolves the encoder name through the closed
+     * {@code Encoder.EncoderType} enum, which rejects registered-engine encoders (lvq, leanvec) at
+     * mapping-parse time. Per the sandbox contract a tenant method supplies its own
+     * {@link ResolvedIndexSpec} instead (see {@code FixtureMethod}); everything else mirrors the
+     * default implementation.
+     */
+    @Override
+    public KNNLibraryIndexingContext getKNNLibraryIndexingContext(
+        KNNMethodContext knnMethodContext,
+        KNNMethodConfigContext knnMethodConfigContext
+    ) {
+        KNNLibraryIndexingContext componentContext = methodComponent.getKNNLibraryIndexingContext(
+            knnMethodContext.getMethodComponentContext(),
+            knnMethodConfigContext
+        );
+        Map<String, Object> parameterMap = componentContext.getLibraryParameters();
+        parameterMap.put(SPACE_TYPE, convertUserToMethodSpaceType(knnMethodContext.getSpaceType()).getValue());
+        parameterMap.put(VECTOR_DATA_TYPE_FIELD, knnMethodConfigContext.getVectorDataType().getValue());
+        return KNNLibraryIndexingContextImpl.builder()
+            .quantizationConfig(componentContext.getQuantizationConfig())
+            .parameters(parameterMap)
+            .vectorValidator(doGetVectorValidator(knnMethodContext, knnMethodConfigContext))
+            .perDimensionValidator(doGetPerDimensionValidator(knnMethodContext, knnMethodConfigContext))
+            .perDimensionProcessor(doGetPerDimensionProcessor(knnMethodContext, knnMethodConfigContext))
+            .vectorTransformer(getVectorTransformer(knnMethodContext.getSpaceType()))
+            .trainingConfigValidationSetup(doGetTrainingConfigValidationSetup())
+            .resolvedSpec(buildSvsResolvedSpec(knnMethodContext, knnMethodConfigContext))
+            .build();
+    }
+
+    // Package-private: the unit test pins lvq/leanvec classification here directly, because the
+    // full indexing-context path runs the encoders' native AVX-512 platform check.
+    static ResolvedIndexSpec buildSvsResolvedSpec(KNNMethodContext methodContext, KNNMethodConfigContext configContext) {
+        Encoder.EncoderType encoderType = Encoder.EncoderType.FLAT;
+        Encoder.QuantizationBits quantizationBits = Encoder.QuantizationBits.FULL_PRECISION;
+
+        Map<String, Object> methodParams = methodContext.getMethodComponentContext().getParameters();
+        if (methodParams != null && methodParams.get(METHOD_ENCODER_PARAMETER) instanceof MethodComponentContext encoderCtx) {
+            String encoderName = encoderCtx.getName();
+            if (ENCODER_FLAT.equals(encoderName)) {
+                encoderType = Encoder.EncoderType.FLAT;
+                quantizationBits = Encoder.QuantizationBits.FULL_PRECISION;
+            } else if (ENCODER_SQ.equals(encoderName)) {
+                encoderType = Encoder.EncoderType.SQ;
+                Object sqType = encoderCtx.getParameters().get(SVSConstants.FAISS_SVS_SQ_TYPE);
+                quantizationBits = SVSConstants.FAISS_SVS_SQ_TYPE_SQ8.equals(sqType)
+                    ? Encoder.QuantizationBits.SEVEN
+                    : Encoder.QuantizationBits.SIXTEEN;
+            } else {
+                // lvq / leanvec: the classification enum is closed, SQ is the closest fit (scalar
+                // quantization per vector); bits mapped by compression level as in getSupportedBits.
+                encoderType = Encoder.EncoderType.SQ;
+                quantizationBits = Encoder.QuantizationBits.SEVEN;
+            }
+        }
+
+        Integer dimension = configContext.getDimension();
+        return ResolvedIndexSpec.builder()
+            .engine(methodContext.getKnnEngine())
+            .methodName(methodContext.getMethodComponentContext().getName())
+            .encoderType(encoderType)
+            .quantizationBits(quantizationBits)
+            .compressionLevel(configContext.getCompressionLevel())
+            .mode(
+                Mode.isConfigured(configContext.getMode())
+                    ? configContext.getMode()
+                    : KNNMethodConfigContext.deriveMode(configContext.getUserConfiguredCompressionLevel())
+            )
+            .vectorDataType(configContext.getVectorDataType())
+            .dimension(dimension != null ? dimension : 0)
+            .indexVersionCreated(configContext.getVersionCreated())
+            // SVS serves search from its own native index; the faiss memory-optimized (partial loading)
+            // path never applies. The default already excludes non-faiss engines; pin it explicitly so
+            // the SQ classification above can never opt this engine in.
+            .memoryOptimizedEligibleOverride(Boolean.FALSE)
+            .build();
     }
 
     private static MethodComponent initMethodComponent() {

@@ -6,14 +6,15 @@
 package org.opensearch.knn.sandbox.svs;
 
 import org.apache.commons.lang3.ArrayUtils;
-import org.opensearch.knn.common.KNNConstants;
+import org.opensearch.knn.index.engine.NativeEngineService;
+import org.opensearch.knn.index.engine.NativeIndexBuildParams;
+import org.opensearch.knn.index.engine.NativeSearchParams;
 import org.opensearch.knn.index.query.KNNQueryResult;
 import org.opensearch.knn.index.store.IndexInputWithBuffer;
 import org.opensearch.knn.index.store.IndexOutputWithBuffer;
-import org.opensearch.knn.index.engine.NativeEngineService;
 import org.opensearch.knn.sandbox.AbstractNativeEngineService;
 
-import java.util.Map;
+import static org.opensearch.knn.sandbox.svs.SVSConstants.INDEX_THREAD_QTY_KEY;
 
 /**
  * {@link NativeEngineService} for the experimental Intel SVS engine. Routes every native index operation to
@@ -31,61 +32,52 @@ public class SvsNativeEngineService extends AbstractNativeEngineService {
     }
 
     @Override
-    public long initIndex(long numDocs, int dim, Map<String, Object> parameters) {
-        return SvsService.initIndex(numDocs, dim, parameters);
+    public long initIndex(NativeIndexBuildParams params) {
+        return SvsService.initIndex(params.numDocs(), params.dim(), params.engineParameters().raw());
     }
 
     @Override
-    public void insertToIndex(int[] docs, long vectorsAddress, int dimension, Map<String, Object> parameters, long indexAddress) {
-        int threadCount = (int) parameters.getOrDefault(KNNConstants.INDEX_THREAD_QTY, 0);
-        SvsService.insertToIndex(docs, vectorsAddress, dimension, indexAddress, threadCount);
+    public void insertToIndex(int[] docs, long vectorsAddress, long indexAddress, NativeIndexBuildParams params) {
+        int threadCount = params.engineParameters().get(INDEX_THREAD_QTY_KEY, 0);
+        SvsService.insertToIndex(docs, vectorsAddress, params.dim(), indexAddress, threadCount);
     }
 
     @Override
-    public void writeIndex(IndexOutputWithBuffer output, long indexAddress, Map<String, Object> parameters, boolean skipFlat) {
+    public void writeIndex(IndexOutputWithBuffer output, long indexAddress, NativeIndexBuildParams params) {
         SvsService.writeIndex(indexAddress, output);
     }
 
     @Override
-    public long loadIndex(IndexInputWithBuffer readStream, Map<String, Object> parameters) {
+    public long loadIndex(IndexInputWithBuffer readStream, NativeIndexBuildParams params) {
         return SvsService.loadIndexWithStream(readStream);
     }
 
     @Override
-    public KNNQueryResult[] queryIndex(
-        long indexPointer,
-        float[] queryVector,
-        int k,
-        Map<String, ?> methodParameters,
-        long[] filteredIds,
-        int filterIdsType,
-        int[] parentIds
-    ) {
-        if (ArrayUtils.isNotEmpty(parentIds)) {
+    public KNNQueryResult[] queryIndex(long indexPointer, NativeSearchParams params) {
+        if (ArrayUtils.isNotEmpty(params.parentIds())) {
             // Reject rather than silently ignore parentIds, which would return multiple children per parent.
             throw new UnsupportedOperationException("Nested fields are not supported by the experimental SVS engine");
         }
-        if (ArrayUtils.isNotEmpty(filteredIds)) {
-            return SvsService.queryIndexWithFilter(indexPointer, queryVector, k, methodParameters, filteredIds, filterIdsType);
+        if (ArrayUtils.isNotEmpty(params.filteredIds())) {
+            return SvsService.queryIndexWithFilter(
+                indexPointer,
+                params.queryVector(),
+                params.k(),
+                params.methodParameters().raw(),
+                params.filteredIds(),
+                params.filterIdsType()
+            );
         }
-        return SvsService.queryIndex(indexPointer, queryVector, k, methodParameters);
+        return SvsService.queryIndex(indexPointer, params.queryVector(), params.k(), params.methodParameters().raw());
     }
 
     @Override
-    public KNNQueryResult[] radiusQueryIndex(
-        long indexPointer,
-        float[] queryVector,
-        float radius,
-        Map<String, ?> methodParameters,
-        int indexMaxResultWindow,
-        long[] filteredIds,
-        int filterIdsType,
-        int[] parentIds
-    ) {
-        if (ArrayUtils.isNotEmpty(parentIds)) {
+    public KNNQueryResult[] radiusQueryIndex(long indexPointer, NativeSearchParams params) {
+        if (ArrayUtils.isNotEmpty(params.parentIds())) {
             // Reject rather than silently ignore parentIds, which would return multiple children per parent.
             throw new UnsupportedOperationException("Nested fields are not supported by the experimental SVS engine");
         }
+        final float radius = params.radius();
         if (radius <= 0) {
             // The SVS index only accepts a strictly positive faiss-domain radius. Core converts the
             // user-facing threshold per space type (Faiss#distanceToRadialThreshold/#scoreToRadialThreshold),
@@ -97,23 +89,28 @@ public class SvsNativeEngineService extends AbstractNativeEngineService {
                     + "); use a stricter max_distance/min_score for this space type"
             );
         }
-        if (ArrayUtils.isNotEmpty(filteredIds)) {
+        if (ArrayUtils.isNotEmpty(params.filteredIds())) {
             return SvsService.radiusQueryIndexWithFilter(
                 indexPointer,
-                queryVector,
+                params.queryVector(),
                 radius,
-                methodParameters,
-                indexMaxResultWindow,
-                filteredIds,
-                filterIdsType
+                params.methodParameters().raw(),
+                params.indexMaxResultWindow(),
+                params.filteredIds(),
+                params.filterIdsType()
             );
         }
-        return SvsService.radiusQueryIndex(indexPointer, queryVector, radius, methodParameters, indexMaxResultWindow);
+        return SvsService.radiusQueryIndex(
+            indexPointer,
+            params.queryVector(),
+            radius,
+            params.methodParameters().raw(),
+            params.indexMaxResultWindow()
+        );
     }
 
     @Override
-    public void free(long indexPointer, boolean isBinaryIndex) {
-        // isBinaryIndex is ignored: the SVS engine has no binary indices.
+    public void free(long indexPointer) {
         SvsService.free(indexPointer);
     }
 }

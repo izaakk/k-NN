@@ -8,6 +8,8 @@ package org.opensearch.knn.sandbox.svs;
 import org.opensearch.knn.index.engine.KNNEngineDefinition;
 import org.opensearch.knn.index.engine.KNNLibrary;
 import org.opensearch.knn.index.engine.NativeEngineService;
+import org.opensearch.knn.index.mapper.EngineFieldStrategy;
+import org.opensearch.knn.index.mapper.FaissFieldStrategy;
 
 import java.util.Set;
 
@@ -39,6 +41,13 @@ public class SvsEngineProvider implements KNNEngineDefinition {
     @Override
     public NativeEngineService nativeService() {
         return nativeService;
+    }
+
+    @Override
+    public EngineFieldStrategy fieldStrategy() {
+        // SVS indexes are faiss-format and score like faiss (SvsLibrary delegates scoring/threshold
+        // translation to Faiss), so the faiss field strategy applies unchanged.
+        return FaissFieldStrategy.INSTANCE;
     }
 
     @Override

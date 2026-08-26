@@ -12,6 +12,7 @@ import org.opensearch.knn.index.engine.MethodComponentContext;
 import org.opensearch.knn.index.engine.Parameter;
 import org.opensearch.knn.index.mapper.CompressionLevel;
 
+import java.util.EnumSet;
 import java.util.Locale;
 import java.util.Set;
 
@@ -158,4 +159,18 @@ public class FaissSVSLeanVecEncoder implements Encoder {
         // Compression varies with the reduced dimensionality and bit widths; do not claim a fixed level.
         return CompressionLevel.NOT_CONFIGURED;
     }
+
+    @Override
+    public Set<QuantizationBits> getSupportedBits() {
+        // LVQ-style widths under the LeanVec projection; effective compression additionally depends on
+        // the reduced dimensionality, so calculateCompressionLevel reports NOT_CONFIGURED.
+        return EnumSet.of(QuantizationBits.FOUR, QuantizationBits.SEVEN);
+    }
+
+    @Override
+    public EncoderType getEncoderType() {
+        // See FaissSVSLVQEncoder: closed enum, LVQ-style scalar quantization under a projection.
+        return EncoderType.SQ;
+    }
+
 }

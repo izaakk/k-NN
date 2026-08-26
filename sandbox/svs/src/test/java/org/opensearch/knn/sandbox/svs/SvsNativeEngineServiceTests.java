@@ -5,9 +5,9 @@
 
 package org.opensearch.knn.sandbox.svs;
 
+import org.opensearch.knn.index.engine.EngineParameters;
+import org.opensearch.knn.index.engine.NativeSearchParams;
 import org.opensearch.test.OpenSearchTestCase;
-
-import java.util.Map;
 
 /**
  * Pins the query-time rejection paths of {@link SvsNativeEngineService}. All of these throw before any
@@ -20,7 +20,10 @@ public class SvsNativeEngineServiceTests extends OpenSearchTestCase {
     public void testQueryIndex_whenParentIds_thenNestedRejected() {
         UnsupportedOperationException e = expectThrows(
             UnsupportedOperationException.class,
-            () -> service.queryIndex(1L, new float[] { 1f }, 10, Map.of(), null, 0, new int[] { 3, 7 })
+            () -> service.queryIndex(
+                1L,
+                NativeSearchParams.forTopK(new float[] { 1f }, 10, EngineParameters.EMPTY, null, 0, new int[] { 3, 7 })
+            )
         );
         assertTrue(e.getMessage(), e.getMessage().contains("Nested fields are not supported"));
     }
@@ -28,7 +31,10 @@ public class SvsNativeEngineServiceTests extends OpenSearchTestCase {
     public void testRadiusQueryIndex_whenParentIds_thenNestedRejected() {
         UnsupportedOperationException e = expectThrows(
             UnsupportedOperationException.class,
-            () -> service.radiusQueryIndex(1L, new float[] { 1f }, 1.0f, Map.of(), 10000, null, 0, new int[] { 3, 7 })
+            () -> service.radiusQueryIndex(
+                1L,
+                NativeSearchParams.forRadial(new float[] { 1f }, 1.0f, 10000, EngineParameters.EMPTY, null, 0, new int[] { 3, 7 })
+            )
         );
         assertTrue(e.getMessage(), e.getMessage().contains("Nested fields are not supported"));
     }
@@ -42,7 +48,10 @@ public class SvsNativeEngineServiceTests extends OpenSearchTestCase {
         for (float radius : new float[] { 0.0f, -0.4f }) {
             UnsupportedOperationException e = expectThrows(
                 UnsupportedOperationException.class,
-                () -> service.radiusQueryIndex(1L, new float[] { 1f }, radius, Map.of(), 10000, null, 0, null)
+                () -> service.radiusQueryIndex(
+                    1L,
+                    NativeSearchParams.forRadial(new float[] { 1f }, radius, 10000, EngineParameters.EMPTY, null, 0, null)
+                )
             );
             assertTrue(e.getMessage(), e.getMessage().contains("non-positive radius"));
         }

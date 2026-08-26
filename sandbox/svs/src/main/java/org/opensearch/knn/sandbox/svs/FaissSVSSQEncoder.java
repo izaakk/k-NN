@@ -13,6 +13,7 @@ import org.opensearch.knn.index.engine.MethodComponentContext;
 import org.opensearch.knn.index.engine.Parameter;
 import org.opensearch.knn.index.mapper.CompressionLevel;
 
+import java.util.EnumSet;
 import java.util.Locale;
 import java.util.Set;
 
@@ -97,4 +98,17 @@ public class FaissSVSSQEncoder implements Encoder {
     ) {
         return FAISS_SVS_SQ_TYPE_SQ8.equals(resolveType(encoderContext)) ? CompressionLevel.x4 : CompressionLevel.x2;
     }
+
+    @Override
+    public Set<QuantizationBits> getSupportedBits() {
+        // Mapped by compression level (the enum has no EIGHT): sq8 is x4 (SEVEN), fp16 is x2 (SIXTEEN),
+        // mirroring calculateCompressionLevel.
+        return EnumSet.of(QuantizationBits.SEVEN, QuantizationBits.SIXTEEN);
+    }
+
+    @Override
+    public EncoderType getEncoderType() {
+        return EncoderType.SQ;
+    }
+
 }

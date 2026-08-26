@@ -12,6 +12,7 @@ import org.opensearch.knn.index.engine.MethodComponentContext;
 import org.opensearch.knn.index.engine.Parameter;
 import org.opensearch.knn.index.mapper.CompressionLevel;
 
+import java.util.EnumSet;
 import java.util.Locale;
 import java.util.Set;
 
@@ -118,4 +119,19 @@ public class FaissSVSLVQEncoder implements Encoder {
         }
         return CompressionLevel.x4;
     }
+
+    @Override
+    public Set<QuantizationBits> getSupportedBits() {
+        // Mapped by compression level (the enum has no LVQ widths): 4x0 is x8 (FOUR), 4x4/4x8 report x4
+        // (SEVEN), mirroring calculateCompressionLevel.
+        return EnumSet.of(QuantizationBits.FOUR, QuantizationBits.SEVEN);
+    }
+
+    @Override
+    public EncoderType getEncoderType() {
+        // The classification enum is closed (FLAT/SQ/PQ/BQ); LVQ is per-vector scalar quantization, so
+        // SQ is the closest fit. An open classification for registered-engine encoders is a core follow-up.
+        return EncoderType.SQ;
+    }
+
 }

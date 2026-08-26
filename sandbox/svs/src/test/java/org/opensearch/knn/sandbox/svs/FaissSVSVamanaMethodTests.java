@@ -9,10 +9,14 @@ import org.opensearch.Version;
 import org.opensearch.common.ValidationException;
 import org.opensearch.knn.index.SpaceType;
 import org.opensearch.knn.index.VectorDataType;
+import org.opensearch.knn.index.engine.Encoder;
+import org.opensearch.knn.index.engine.KNNEngine;
 import org.opensearch.knn.index.engine.KNNLibraryIndexingContext;
 import org.opensearch.knn.index.engine.KNNMethodConfigContext;
+import org.opensearch.knn.index.engine.KNNMethodContext;
 import org.opensearch.knn.index.engine.MethodComponent;
 import org.opensearch.knn.index.engine.MethodComponentContext;
+import org.opensearch.knn.index.engine.ResolvedIndexSpec;
 import org.opensearch.test.OpenSearchTestCase;
 
 import java.util.Map;
@@ -196,4 +200,44 @@ public class FaissSVSVamanaMethodTests extends OpenSearchTestCase {
             )
         );
     }
+
+    /**
+     * Every tenant encoder name must survive mapping-time index-spec resolution. The AbstractKNNMethod
+     * default rejects names outside the closed EncoderType enum ("Unsupported encoder type: [leanvec]"),
+     * which is exactly the regression this pins: the method overrides the resolution and classifies
+     * lvq/leanvec as SQ with memory-optimized search pinned off. flat/sq run the full public path;
+     * lvq/leanvec pin the spec builder directly because the full path runs the encoders' native
+     * AVX-512 platform check, which unit tests cannot load.
+     */
+    public void testIndexingContext_resolvesForEveryEncoder() {
+        for (String encoderName : new String[] { ENCODER_FLAT, ENCODER_SQ }) {
+            ResolvedIndexSpec spec = new FaissSVSVamanaMethod().getKNNLibraryIndexingContext(
+                methodContextWithEncoder(encoderName),
+                configContext()
+            ).getResolvedSpec();
+            assertNotNull(encoderName, spec);
+            Encoder.EncoderType expectedType = ENCODER_FLAT.equals(encoderName) ? Encoder.EncoderType.FLAT : Encoder.EncoderType.SQ;
+            assertEquals(encoderName, expectedType, spec.getEncoderType());
+            assertFalse(encoderName, spec.isMemoryOptimizedEligible());
+        }
+        for (String encoderName : new String[] { FAISS_SVS_ENCODER_LVQ, "leanvec" }) {
+            ResolvedIndexSpec spec = FaissSVSVamanaMethod.buildSvsResolvedSpec(methodContextWithEncoder(encoderName), configContext());
+            assertNotNull(encoderName, spec);
+            assertEquals(METHOD_SVS_VAMANA, spec.getMethodName());
+            assertEquals(encoderName, Encoder.EncoderType.SQ, spec.getEncoderType());
+            assertFalse(encoderName, spec.isMemoryOptimizedEligible());
+        }
+    }
+
+    private static KNNMethodContext methodContextWithEncoder(String encoderName) {
+        return new KNNMethodContext(
+            KNNEngine.getEngine(SVSConstants.SVS_ENGINE_NAME),
+            SpaceType.L2,
+            new MethodComponentContext(
+                METHOD_SVS_VAMANA,
+                Map.of(METHOD_ENCODER_PARAMETER, new MethodComponentContext(encoderName, Map.of()))
+            )
+        );
+    }
+
 }
