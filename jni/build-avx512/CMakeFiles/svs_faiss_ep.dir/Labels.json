@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/CMakeFiles/svs_faiss_ep"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/CMakeFiles/svs_faiss_ep.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/CMakeFiles/svs_faiss_ep-complete.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-build.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-configure.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-download.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-install.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-mkdir.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-patch.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"svs_faiss_ep"
+		],
+		"name" : "svs_faiss_ep"
+	}
+}

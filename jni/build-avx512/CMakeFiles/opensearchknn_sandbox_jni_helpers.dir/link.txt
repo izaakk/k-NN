@@ -1,0 +1,2 @@
+/usr/bin/ar qc libopensearchknn_sandbox_jni_helpers.a CMakeFiles/opensearchknn_sandbox_jni_helpers.dir/src/jni_util.cpp.o CMakeFiles/opensearchknn_sandbox_jni_helpers.dir/src/commons.cpp.o
+/usr/bin/ranlib libopensearchknn_sandbox_jni_helpers.a

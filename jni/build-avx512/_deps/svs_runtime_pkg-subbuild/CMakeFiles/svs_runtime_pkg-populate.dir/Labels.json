@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/_deps/svs_runtime_pkg-subbuild/CMakeFiles/svs_runtime_pkg-populate"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/_deps/svs_runtime_pkg-subbuild/CMakeFiles/svs_runtime_pkg-populate.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/_deps/svs_runtime_pkg-subbuild/CMakeFiles/svs_runtime_pkg-populate-complete.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/_deps/svs_runtime_pkg-subbuild/svs_runtime_pkg-populate-prefix/src/svs_runtime_pkg-populate-stamp/svs_runtime_pkg-populate-build.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/_deps/svs_runtime_pkg-subbuild/svs_runtime_pkg-populate-prefix/src/svs_runtime_pkg-populate-stamp/svs_runtime_pkg-populate-configure.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/_deps/svs_runtime_pkg-subbuild/svs_runtime_pkg-populate-prefix/src/svs_runtime_pkg-populate-stamp/svs_runtime_pkg-populate-download.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/_deps/svs_runtime_pkg-subbuild/svs_runtime_pkg-populate-prefix/src/svs_runtime_pkg-populate-stamp/svs_runtime_pkg-populate-install.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/_deps/svs_runtime_pkg-subbuild/svs_runtime_pkg-populate-prefix/src/svs_runtime_pkg-populate-stamp/svs_runtime_pkg-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/_deps/svs_runtime_pkg-subbuild/svs_runtime_pkg-populate-prefix/src/svs_runtime_pkg-populate-stamp/svs_runtime_pkg-populate-patch.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/_deps/svs_runtime_pkg-subbuild/svs_runtime_pkg-populate-prefix/src/svs_runtime_pkg-populate-stamp/svs_runtime_pkg-populate-test.rule"
+		},
+		{
+			"file" : "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/_deps/svs_runtime_pkg-subbuild/svs_runtime_pkg-populate-prefix/src/svs_runtime_pkg-populate-stamp/svs_runtime_pkg-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"svs_runtime_pkg-populate"
+		],
+		"name" : "svs_runtime_pkg-populate"
+	}
+}

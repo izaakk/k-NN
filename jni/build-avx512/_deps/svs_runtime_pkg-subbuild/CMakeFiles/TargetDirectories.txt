@@ -1,0 +1,3 @@
+/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/_deps/svs_runtime_pkg-subbuild/CMakeFiles/svs_runtime_pkg-populate.dir
+/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/_deps/svs_runtime_pkg-subbuild/CMakeFiles/edit_cache.dir
+/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/_deps/svs_runtime_pkg-subbuild/CMakeFiles/rebuild_cache.dir

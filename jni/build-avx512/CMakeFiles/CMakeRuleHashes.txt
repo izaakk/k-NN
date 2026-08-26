@@ -1,0 +1,10 @@
+# Hashes of file build rules.
+9adcd07d2f1edcdb5a4fa3e14fd2eef9 CMakeFiles/svs_faiss_ep
+5f9b5fb13d61ed49eb5cdf771ef708ae CMakeFiles/svs_faiss_ep-complete
+e131512206a892468e7830fc63efcd9c svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-build
+ab822be7754ee9c83c4d7c8771513a29 svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-configure
+aea2ad01b7df8f3f550d6c3f7c0b9952 svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-download
+dbe0f41fd3892746a4e866b0d328ebed svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-install
+1f267bb36b267d361967b79f72770621 svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-mkdir
+a614939ea9b67a544899e03a865562e7 svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-patch
+168bbdc8b422d25e6286e79a78b7212a svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-update

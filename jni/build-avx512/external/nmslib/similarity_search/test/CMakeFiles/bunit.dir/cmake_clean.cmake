@@ -1,0 +1,41 @@
+file(REMOVE_RECURSE
+  "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/external/nmslib/similarity_search/release/bunit"
+  "/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/external/nmslib/similarity_search/release/bunit.pdb"
+  "CMakeFiles/bunit.dir/bunit.cc.o"
+  "CMakeFiles/bunit.dir/bunit.cc.o.d"
+  "CMakeFiles/bunit.dir/test_distfunc.cc.o"
+  "CMakeFiles/bunit.dir/test_distfunc.cc.o.d"
+  "CMakeFiles/bunit.dir/test_editdist.cc.o"
+  "CMakeFiles/bunit.dir/test_editdist.cc.o.d"
+  "CMakeFiles/bunit.dir/test_eval.cc.o"
+  "CMakeFiles/bunit.dir/test_eval.cc.o.d"
+  "CMakeFiles/bunit.dir/test_falconn_heap.cc.o"
+  "CMakeFiles/bunit.dir/test_falconn_heap.cc.o.d"
+  "CMakeFiles/bunit.dir/test_fp.cc.o"
+  "CMakeFiles/bunit.dir/test_fp.cc.o.d"
+  "CMakeFiles/bunit.dir/test_lpnorm.cc.o"
+  "CMakeFiles/bunit.dir/test_lpnorm.cc.o.d"
+  "CMakeFiles/bunit.dir/test_object.cc.o"
+  "CMakeFiles/bunit.dir/test_object.cc.o.d"
+  "CMakeFiles/bunit.dir/test_overlap.cc.o"
+  "CMakeFiles/bunit.dir/test_overlap.cc.o.d"
+  "CMakeFiles/bunit.dir/test_pow.cc.o"
+  "CMakeFiles/bunit.dir/test_pow.cc.o.d"
+  "CMakeFiles/bunit.dir/test_some_stat.cc.o"
+  "CMakeFiles/bunit.dir/test_some_stat.cc.o.d"
+  "CMakeFiles/bunit.dir/test_space_scalar.cc.o"
+  "CMakeFiles/bunit.dir/test_space_scalar.cc.o.d"
+  "CMakeFiles/bunit.dir/test_space_serial.cc.o"
+  "CMakeFiles/bunit.dir/test_space_serial.cc.o.d"
+  "CMakeFiles/bunit.dir/test_sqfd.cc.o"
+  "CMakeFiles/bunit.dir/test_sqfd.cc.o.d"
+  "CMakeFiles/bunit.dir/test_thread_pool.cc.o"
+  "CMakeFiles/bunit.dir/test_thread_pool.cc.o.d"
+  "CMakeFiles/bunit.dir/test_timer.cc.o"
+  "CMakeFiles/bunit.dir/test_timer.cc.o.d"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang CXX)
+  include(CMakeFiles/bunit.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

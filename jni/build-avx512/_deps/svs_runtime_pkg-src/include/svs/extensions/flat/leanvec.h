@@ -1,0 +1,55 @@
+/**
+ *    Copyright (C) 2023 Intel Corporation
+ *
+ *    This software and the related documents are Intel copyrighted materials,
+ *    and your use of them is governed by the express license under which they
+ *    were provided to you ("License"). Unless the License provides otherwise,
+ *    you may not use, modify, copy, publish, distribute, disclose or transmit
+ *    this software or the related documents without Intel's prior written
+ *    permission.
+ *
+ *    This software and the related documents are provided as is, with no
+ *    express or implied warranties, other than those that are expressly stated
+ *    in the License.
+ */
+
+#pragma once
+
+#include "svs/index/flat/flat.h"
+#include "svs/leanvec/leanvec.h"
+// #include "svs/index/flat/extensions.h"
+// #include "svs/extensions/vamana/leanvec.h"
+
+namespace svs::leanvec {
+
+template <IsLeanDataset Data, typename Distance>
+auto svs_invoke(
+    svs::tag_t<svs::index::flat::extensions::distance>,
+    const Data& dataset,
+    const Distance& distance
+) {
+    return dataset.adapt(dataset.view_primary_dataset(), distance);
+}
+
+/////
+///// Distance
+/////
+
+template <IsLeanDataset Data, typename Distance, typename Query>
+double svs_invoke(
+    svs::tag_t<svs::index::flat::extensions::get_distance_ext>,
+    const Data& data,
+    const Distance& distance,
+    size_t internal_id,
+    const Query& query
+) {
+    //  For Leanvec dataset, use secondary data to calculate the distance
+    auto secondary_distance = data.adapt_secondary(data.view_secondary_dataset(), distance);
+    svs::distance::maybe_fix_argument(secondary_distance, query);
+    auto secondary_span = data.get_secondary(internal_id);
+
+    auto dist = svs::distance::compute(secondary_distance, query, secondary_span);
+
+    return static_cast<double>(dist);
+}
+} // namespace svs::leanvec

@@ -1,0 +1,13 @@
+# Target labels
+ svs_faiss_ep
+# Source files and their labels
+/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/CMakeFiles/svs_faiss_ep
+/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/CMakeFiles/svs_faiss_ep.rule
+/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/CMakeFiles/svs_faiss_ep-complete.rule
+/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-build.rule
+/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-configure.rule
+/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-download.rule
+/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-install.rule
+/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-mkdir.rule
+/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-patch.rule
+/home/ubuntu/workspaces/knn-pr3-svs-tenant/repos/k-NN/jni/build-avx512/svs_faiss/src/svs_faiss_ep-stamp/svs_faiss_ep-update.rule
