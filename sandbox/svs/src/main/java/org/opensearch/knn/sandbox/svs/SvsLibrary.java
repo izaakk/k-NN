@@ -33,8 +33,11 @@ import java.util.Map;
  */
 public class SvsLibrary extends NativeLibrary {
 
-    // Compatibility version tag baked into the file name; matches the faiss family SVS shares its format with.
-    private static final String CURRENT_VERSION = "165";
+    // Compatibility version tag baked into the segment file name. "165" mirrored core faiss; "166" marks the
+    // SVS serialization break introduced with static Vamana (the vendored faiss reads an is_static field
+    // unconditionally), so files from earlier sandbox builds are distinguishable by name. Note the reader
+    // discovers files by segment prefix and field suffix, not by this tag: old segments still need a reindex.
+    private static final String CURRENT_VERSION = "166";
 
     private final MethodResolver methodResolver = new SvsMethodResolver();
 
