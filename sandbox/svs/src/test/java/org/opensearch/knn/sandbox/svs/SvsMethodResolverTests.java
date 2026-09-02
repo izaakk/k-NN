@@ -22,6 +22,7 @@ import java.util.Map;
 
 import static org.opensearch.knn.common.KNNConstants.ENCODER_SQ;
 import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
+import static org.opensearch.knn.sandbox.svs.SVSConstants.FAISS_SVS_ENCODER_LEANVEC;
 import static org.opensearch.knn.sandbox.svs.SVSConstants.FAISS_SVS_ENCODER_LVQ;
 import static org.opensearch.knn.sandbox.svs.SVSConstants.FAISS_SVS_SQ_TYPE;
 import static org.opensearch.knn.sandbox.svs.SVSConstants.FAISS_SVS_SQ_TYPE_FP16;
@@ -142,4 +143,25 @@ public class SvsMethodResolverTests extends OpenSearchTestCase {
         );
         assertTrue(e.getMessage().contains("compression"));
     }
+
+    /**
+     * LeanVec resolves to NOT_CONFIGURED, which silently defeats the generic compression conflict check; a
+     * user-configured compression_level next to an explicit leanvec encoder must be rejected, not dropped.
+     */
+    public void testResolveMethod_whenCompressionLevelWithLeanVec_thenThrow() {
+        KNNMethodContext context = new KNNMethodContext(
+            KNNEngine.getEngine(SVSConstants.SVS_ENGINE_NAME),
+            SpaceType.L2,
+            new MethodComponentContext(
+                METHOD_SVS_VAMANA,
+                Map.of(METHOD_ENCODER_PARAMETER, new MethodComponentContext(FAISS_SVS_ENCODER_LEANVEC, Map.of()))
+            )
+        );
+        ValidationException e = expectThrows(
+            ValidationException.class,
+            () -> RESOLVER.resolveMethod(context, configBuilder().compressionLevel(CompressionLevel.x2).build(), false, SpaceType.L2)
+        );
+        assertTrue(e.getMessage(), e.getMessage().contains("cannot be combined with the [leanvec] encoder"));
+    }
+
 }

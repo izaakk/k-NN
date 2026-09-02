@@ -162,7 +162,8 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
         deleteKNNIndex(indexName);
     }
 
-    // Asserts the SVS search context accepts a query-time search_window_size method parameter.
+    // Asserts the SVS search context accepts the query-time search_window_size and search_buffer_capacity
+    // method parameters on the top-k path.
     @SneakyThrows
     public void testSVSVamana_withSearchWindowSizeMethodParameter_thenSucceed() {
         final String indexName = "test-svs-vamana-sw-param";
@@ -202,7 +203,7 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
             .fieldName(fieldName)
             .vector(new float[] { 1.0f, 1.0f, 1.0f })
             .k(k)
-            .methodParameters(Map.of("search_window_size", 64))
+            .methodParameters(Map.of("search_window_size", 64, "search_buffer_capacity", 96))
             .build();
         Response response = searchKNNIndex(indexName, query, k);
         List<KNNResult> results = parseSearchResponse(EntityUtils.toString(response.getEntity()), fieldName);
@@ -310,7 +311,8 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
         deleteKNNIndex(indexName);
     }
 
-    // Radial combined with the engine's query-time search_window_size method parameter.
+    // Radial combined with the engine's query-time search_window_size and search_buffer_capacity method
+    // parameters (the radial path honors both, same as top-k).
     @SneakyThrows
     public void testSVSVamana_withRadialAndSearchWindowSize_thenSucceed() {
         final String indexName = "test-svs-vamana-radial-sw";
@@ -323,7 +325,7 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
             .fieldName(fieldName)
             .vector(RADIAL_QUERY)
             .maxDistance(5.0f)
-            .methodParameters(Map.of("search_window_size", 64))
+            .methodParameters(Map.of("search_window_size", 64, "search_buffer_capacity", 96))
             .build();
         List<KNNResult> results = parseSearchResponse(EntityUtils.toString(searchKNNIndex(indexName, query, 10).getEntity()), fieldName);
         assertDocIds(results, "0", "1");

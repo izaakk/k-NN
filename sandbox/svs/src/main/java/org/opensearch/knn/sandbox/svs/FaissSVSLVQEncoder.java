@@ -88,7 +88,23 @@ public class FaissSVSLVQEncoder implements Encoder {
 
     // Package-private: the LeanVec encoder shares the LVQ platform gate (LeanVec storage is LVQ-backed).
     static void validatePlatformSupportsLvq() {
-        if (SvsService.isLvqLeanvecEnabled() == false) {
+        final boolean lvqEnabled;
+        try {
+            lvqEnabled = SvsService.isLvqLeanvecEnabled();
+        } catch (UnsatisfiedLinkError | ExceptionInInitializerError | NoClassDefFoundError e) {
+            // The check is the first native touch on this node; a library that cannot load must surface as a
+            // mapping validation error, not as a raw linkage error through the mapping API.
+            throw new IllegalArgumentException(
+                String.format(
+                    Locale.ROOT,
+                    "Encoder [%s] is not supported on this node: the SVS native library could not be loaded (%s)",
+                    FAISS_SVS_ENCODER_LVQ,
+                    e.getClass().getSimpleName()
+                ),
+                e
+            );
+        }
+        if (lvqEnabled == false) {
             throw new IllegalArgumentException(
                 String.format(
                     Locale.ROOT,

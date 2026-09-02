@@ -150,6 +150,13 @@ public class FaissSVSVamanaMethodTests extends OpenSearchTestCase {
             // The LVQ generator runs the encoder's platform check, which needs the SVS native library; in a
             // pure-JVM unit run there is none to load. The LVQ description is asserted end-to-end by the IT.
             org.junit.Assume.assumeNoException("LVQ platform check needs the SVS native library", e);
+        } catch (IllegalArgumentException e) {
+            // The platform gate now wraps a library linkage failure into a validation error; skip only for
+            // that cause so genuine validation failures still fail the test.
+            if (e.getCause() instanceof LinkageError == false) {
+                throw e;
+            }
+            org.junit.Assume.assumeNoException("LVQ platform check needs the SVS native library", e);
         }
     }
 
@@ -174,6 +181,13 @@ public class FaissSVSVamanaMethodTests extends OpenSearchTestCase {
             );
         } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
             org.junit.Assume.assumeNoException("LeanVec platform check needs the SVS native library", e);
+        } catch (IllegalArgumentException e) {
+            // The platform gate now wraps a library linkage failure into a validation error; skip only for
+            // that cause so genuine validation failures still fail the test.
+            if (e.getCause() instanceof LinkageError == false) {
+                throw e;
+            }
+            org.junit.Assume.assumeNoException("LeanVec platform check needs the SVS native library", e);
         }
     }
 
@@ -187,6 +201,13 @@ public class FaissSVSVamanaMethodTests extends OpenSearchTestCase {
                 )
             );
         } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            org.junit.Assume.assumeNoException("LeanVec platform check needs the SVS native library", e);
+        } catch (IllegalArgumentException e) {
+            // The platform gate now wraps a library linkage failure into a validation error; skip only for
+            // that cause so genuine validation failures still fail the test.
+            if (e.getCause() instanceof LinkageError == false) {
+                throw e;
+            }
             org.junit.Assume.assumeNoException("LeanVec platform check needs the SVS native library", e);
         }
     }

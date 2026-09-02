@@ -5,6 +5,10 @@
 
 package org.opensearch.knn.sandbox.svs;
 
+import org.opensearch.Version;
+import org.opensearch.knn.index.VectorDataType;
+import org.opensearch.knn.index.engine.KNNMethodConfigContext;
+import org.opensearch.knn.index.engine.MethodComponent;
 import org.opensearch.knn.index.engine.MethodComponentContext;
 import org.opensearch.knn.index.mapper.CompressionLevel;
 import org.opensearch.test.OpenSearchTestCase;
@@ -64,4 +68,24 @@ public class FaissSVSLeanVecEncoderTests extends OpenSearchTestCase {
         );
         assertEquals(CompressionLevel.NOT_CONFIGURED, encoder.calculateCompressionLevel(null, null));
     }
+
+    /**
+     * The reduced dimensionality must not exceed the field dimension: above it the mapping would be accepted
+     * and only fail inside native training at the first merge over the training threshold.
+     */
+    public void testDimensions_boundedByFieldDimension() {
+        MethodComponent component = new FaissSVSLeanVecEncoder().getMethodComponent();
+        KNNMethodConfigContext context = KNNMethodConfigContext.builder()
+            .vectorDataType(VectorDataType.FLOAT)
+            .dimension(128)
+            .versionCreated(Version.CURRENT)
+            .build();
+        assertNotNull(component.validate(new MethodComponentContext(FAISS_SVS_ENCODER_LEANVEC, Map.of("dimensions", 1024)), context));
+        assertNotNull(component.validate(new MethodComponentContext(FAISS_SVS_ENCODER_LEANVEC, Map.of("dimensions", 129)), context));
+        assertNull(component.validate(new MethodComponentContext(FAISS_SVS_ENCODER_LEANVEC, Map.of("dimensions", 128)), context));
+        assertNull(component.validate(new MethodComponentContext(FAISS_SVS_ENCODER_LEANVEC, Map.of("dimensions", 64)), context));
+        assertNull(component.validate(new MethodComponentContext(FAISS_SVS_ENCODER_LEANVEC, Map.of("dimensions", 0)), context));
+        assertNotNull(component.validate(new MethodComponentContext(FAISS_SVS_ENCODER_LEANVEC, Map.of("dimensions", -1)), context));
+    }
+
 }

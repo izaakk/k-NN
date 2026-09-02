@@ -57,7 +57,14 @@ public class FaissSVSLeanVecEncoder implements Encoder {
         )
         .addParameter(
             METHOD_PARAMETER_LEANVEC_DIMENSIONS,
-            new Parameter.IntegerParameter(METHOD_PARAMETER_LEANVEC_DIMENSIONS, 0, (v, context) -> v >= 0)
+            // 0 = runtime default (dim/2). A value above the field dimension cannot be a reduction; without
+            // this bound it is accepted at mapping time and only fails inside the native training at the
+            // first merge above the training threshold (small segments strip the suffix via the LVQ rewrite).
+            new Parameter.IntegerParameter(
+                METHOD_PARAMETER_LEANVEC_DIMENSIONS,
+                0,
+                (v, context) -> v >= 0 && (context == null || context.getDimension() == null || v <= context.getDimension())
+            )
         )
         .addParameter(
             METHOD_PARAMETER_LEANVEC_TRAINING_THRESHOLD,

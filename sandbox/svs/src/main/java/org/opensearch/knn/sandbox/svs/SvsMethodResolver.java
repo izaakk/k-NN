@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.opensearch.knn.common.KNNConstants.METHOD_ENCODER_PARAMETER;
+import static org.opensearch.knn.sandbox.svs.SVSConstants.FAISS_SVS_ENCODER_LEANVEC;
 import static org.opensearch.knn.sandbox.svs.SVSConstants.FAISS_SVS_ENCODER_LVQ;
 import static org.opensearch.knn.sandbox.svs.SVSConstants.FAISS_SVS_SQ_TYPE;
 import static org.opensearch.knn.sandbox.svs.SVSConstants.FAISS_SVS_SQ_TYPE_FP16;
@@ -100,6 +101,23 @@ public class SvsMethodResolver extends AbstractMethodResolver {
 
         validateEncoderConfig(resolvedKNNMethodContext, knnMethodConfigContext, encoderMap);
         validateCompressionConflicts(knnMethodConfigContext.getCompressionLevel(), resolvedCompressionLevel);
+        // The LeanVec encoder resolves to NOT_CONFIGURED (its ratio depends on the reduced dimensionality), which
+        // makes the generic conflict check above a no-op: a user-configured compression_level would be silently
+        // dropped instead of rejected as it is for every other encoder.
+        if (CompressionLevel.isConfigured(knnMethodConfigContext.getCompressionLevel())
+            && CompressionLevel.isConfigured(resolvedCompressionLevel) == false) {
+            ValidationException validationException = new ValidationException();
+            validationException.addValidationError(
+                String.format(
+                    Locale.ROOT,
+                    "compression_level [%s] cannot be combined with the [%s] encoder: its compression is determined by the "
+                        + "encoder's dimensions parameter",
+                    knnMethodConfigContext.getCompressionLevel().getName(),
+                    FAISS_SVS_ENCODER_LEANVEC
+                )
+            );
+            throw validationException;
+        }
         knnMethodConfigContext.setCompressionLevel(resolvedCompressionLevel);
         resolveMethodParams(
             resolvedKNNMethodContext.getMethodComponentContext(),

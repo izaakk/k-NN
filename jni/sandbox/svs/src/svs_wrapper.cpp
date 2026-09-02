@@ -516,39 +516,47 @@ jobjectArray knn_jni::svs_wrapper::QueryIndex_WithFilter(knn_jni::JNIUtilInterfa
     }
     std::vector<float> dis(k, std::numeric_limits<float>::infinity());
     std::vector<faiss::idx_t> ids(k, -1);
-    float* rawQueryVector = jniUtil->GetFloatArrayElements(env, queryVectorJ, nullptr);
 
     // Set omp threads to 1 so no new OMP threads are created under the search threadpool.
     omp_set_num_threads(1);
 
+    // Pin order is exception-safety: the filter length read, the filter pin, and the selector construction
+    // can all throw, so they run before the query vector is pinned, and every live pin is released on any
+    // throw. Nothing that can throw sits between a pin and its try block.
     if (filterIdsJ != nullptr) {
-        jlong *filteredIdsArray = jniUtil->GetLongArrayElements(env, filterIdsJ, nullptr);
         int filterIdsLength = jniUtil->GetJavaLongArrayLength(env, filterIdsJ);
-        std::unique_ptr<faiss::IDSelector> idSelector;
-        if (filterIdsTypeJ == BITMAP) {
-            idSelector.reset(new faiss::IDSelectorJlongBitmap(filterIdsLength, filteredIdsArray));
-        } else {
-            faiss::idx_t* batchIndices = reinterpret_cast<faiss::idx_t*>(filteredIdsArray);
-            idSelector.reset(new faiss::IDSelectorBatch(filterIdsLength, batchIndices));
-        }
-        svsVamanaParams.sel = idSelector.get();
+        jlong *filteredIdsArray = jniUtil->GetLongArrayElements(env, filterIdsJ, nullptr);
+        float* rawQueryVector = nullptr;
         try {
+            std::unique_ptr<faiss::IDSelector> idSelector;
+            if (filterIdsTypeJ == BITMAP) {
+                idSelector.reset(new faiss::IDSelectorJlongBitmap(filterIdsLength, filteredIdsArray));
+            } else {
+                faiss::idx_t* batchIndices = reinterpret_cast<faiss::idx_t*>(filteredIdsArray);
+                idSelector.reset(new faiss::IDSelectorBatch(filterIdsLength, batchIndices));
+            }
+            svsVamanaParams.sel = idSelector.get();
+            rawQueryVector = jniUtil->GetFloatArrayElements(env, queryVectorJ, nullptr);
             indexReader->search(1, rawQueryVector, k, dis.data(), ids.data(), &svsVamanaParams);
         } catch (...) {
-            jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
+            if (rawQueryVector != nullptr) {
+                jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
+            }
             jniUtil->ReleaseLongArrayElements(env, filterIdsJ, filteredIdsArray, JNI_ABORT);
             throw;
         }
+        jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
         jniUtil->ReleaseLongArrayElements(env, filterIdsJ, filteredIdsArray, JNI_ABORT);
     } else {
+        float* rawQueryVector = jniUtil->GetFloatArrayElements(env, queryVectorJ, nullptr);
         try {
             indexReader->search(1, rawQueryVector, k, dis.data(), ids.data(), &svsVamanaParams);
         } catch (...) {
             jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
             throw;
         }
+        jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
     }
-    jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
 
     return buildQueryResults(jniUtil, env, ids, dis, k);
 }
@@ -583,50 +591,60 @@ jobjectArray knn_jni::svs_wrapper::RangeSearch_WithFilter(knn_jni::JNIUtilInterf
     }
 
     faiss::SearchParametersSVSVamana svsVamanaParams;
+    // Same query-time overrides and capacity >= window clamp as the top-k path.
     svsVamanaParams.search_window_size = knn_jni::commons::getIntegerMethodParameter(
         env, jniUtil, methodParams, knn_jni::SEARCH_WINDOW_SIZE, svsVamanaReader->search_window_size);
+    svsVamanaParams.search_buffer_capacity = knn_jni::commons::getIntegerMethodParameter(
+        env, jniUtil, methodParams, knn_jni::SEARCH_BUFFER_CAPACITY, svsVamanaReader->search_buffer_capacity);
     svsVamanaParams.search_buffer_capacity = std::max(
-        static_cast<size_t>(svsVamanaReader->search_buffer_capacity), svsVamanaParams.search_window_size);
+        static_cast<size_t>(svsVamanaParams.search_buffer_capacity), svsVamanaParams.search_window_size);
 
     // The IndexIDMap range_search forwarder rebuilds a PLAIN faiss::SearchParameters around its translated
     // selector, silently dropping the SVS window/capacity fields above. So the radial path calls the inner
     // IndexSVSVamana directly: the Java-side filter (external doc ids) is wrapped in a selector translating
     // the inner sequential ids through id_map, and result labels are translated back the same way below.
     faiss::RangeSearchResult res(1, true);
-    float* rawQueryVector = jniUtil->GetFloatArrayElements(env, queryVectorJ, nullptr);
 
     // Set omp threads to 1 so no new OMP threads are created under the search threadpool.
     omp_set_num_threads(1);
 
+    // Same pin ordering as QueryIndex_WithFilter: throwing work first, query vector pinned last, every
+    // live pin released on any throw.
     if (filterIdsJ != nullptr) {
-        jlong *filteredIdsArray = jniUtil->GetLongArrayElements(env, filterIdsJ, nullptr);
         int filterIdsLength = jniUtil->GetJavaLongArrayLength(env, filterIdsJ);
-        std::unique_ptr<faiss::IDSelector> idSelector;
-        if (filterIdsTypeJ == BITMAP) {
-            idSelector.reset(new faiss::IDSelectorJlongBitmap(filterIdsLength, filteredIdsArray));
-        } else {
-            faiss::idx_t* batchIndices = reinterpret_cast<faiss::idx_t*>(filteredIdsArray);
-            idSelector.reset(new faiss::IDSelectorBatch(filterIdsLength, batchIndices));
-        }
-        IDSelectorSvsTranslated translatedSelector(indexReader->id_map, idSelector.get());
-        svsVamanaParams.sel = &translatedSelector;
+        jlong *filteredIdsArray = jniUtil->GetLongArrayElements(env, filterIdsJ, nullptr);
+        float* rawQueryVector = nullptr;
         try {
+            std::unique_ptr<faiss::IDSelector> idSelector;
+            if (filterIdsTypeJ == BITMAP) {
+                idSelector.reset(new faiss::IDSelectorJlongBitmap(filterIdsLength, filteredIdsArray));
+            } else {
+                faiss::idx_t* batchIndices = reinterpret_cast<faiss::idx_t*>(filteredIdsArray);
+                idSelector.reset(new faiss::IDSelectorBatch(filterIdsLength, batchIndices));
+            }
+            IDSelectorSvsTranslated translatedSelector(indexReader->id_map, idSelector.get());
+            svsVamanaParams.sel = &translatedSelector;
+            rawQueryVector = jniUtil->GetFloatArrayElements(env, queryVectorJ, nullptr);
             svsVamanaReader->range_search(1, rawQueryVector, radiusJ, &res, &svsVamanaParams);
         } catch (...) {
-            jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
+            if (rawQueryVector != nullptr) {
+                jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
+            }
             jniUtil->ReleaseLongArrayElements(env, filterIdsJ, filteredIdsArray, JNI_ABORT);
             throw;
         }
+        jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
         jniUtil->ReleaseLongArrayElements(env, filterIdsJ, filteredIdsArray, JNI_ABORT);
     } else {
+        float* rawQueryVector = jniUtil->GetFloatArrayElements(env, queryVectorJ, nullptr);
         try {
             svsVamanaReader->range_search(1, rawQueryVector, radiusJ, &res, &svsVamanaParams);
         } catch (...) {
             jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
             throw;
         }
+        jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
     }
-    jniUtil->ReleaseFloatArrayElements(env, queryVectorJ, rawQueryVector, JNI_ABORT);
 
     // res.lims[1] is the number of matches for the single query. Cap at the index max result window; the
     // Java collector re-collects into its own top window, so no native-side sort is needed (same as faiss).
