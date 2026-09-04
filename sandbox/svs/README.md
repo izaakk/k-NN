@@ -110,9 +110,7 @@ segment serves searches at each rung, so recall improves monotonically with merg
     check should be capability-driven). Workaround until then: set the index setting
     `index.knn.advanced.filtered_exact_search_threshold: 0` to keep filtered radial on the native ANN
     path.
-- **Nested fields are not supported** and are rejected at query time: per-parent grouping must happen
-  inside the SVS runtime's graph traversal to guarantee k distinct parents, and the prebuilt
-  `libsvs_runtime` search API does not expose a grouping construct yet (feature request filed upstream).
+- **Nested fields** are not supported yet and are rejected at query time; support comes in a follow-up.
 
 ## Platform notes
 
