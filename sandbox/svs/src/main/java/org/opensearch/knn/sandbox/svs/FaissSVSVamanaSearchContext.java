@@ -15,10 +15,7 @@ import static org.opensearch.knn.sandbox.svs.SVSConstants.METHOD_PARAMETER_SEARC
 import static org.opensearch.knn.sandbox.svs.SVSConstants.METHOD_PARAMETER_SEARCH_WINDOW_SIZE;
 
 /**
- * Faiss SVS Vamana search context. Query-time tunables: {@code search_window_size} (the recall/latency
- * knob, analogous to {@code ef_search}) and {@code search_buffer_capacity} (the candidate-retention pool;
- * for two-level encodings such as LeanVec this is the re-rank pool size, so capacity &gt; window trades a
- * little latency for recall). The native layer enforces capacity &gt;= window.
+ * Query-time parameters for {@code svs_vamana}: {@code search_window_size} and {@code search_buffer_capacity}.
  */
 public final class FaissSVSVamanaSearchContext implements KNNLibrarySearchContext {
 

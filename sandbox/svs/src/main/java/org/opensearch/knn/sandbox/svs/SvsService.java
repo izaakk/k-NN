@@ -16,23 +16,16 @@ import org.opensearch.knn.jni.KNNLibraryLoader;
 import java.util.Map;
 
 /**
- * JNI binding for the isolated Intel SVS native library ({@code libopensearchknn_svs}), which embeds its own
- * SVS-enabled faiss and owns the native lifecycle of {@code svs_vamana} indices separately from the main
- * {@code FaissService}. It is reached only through the {@link SvsEngineProvider} SPI; main code never
- * references this class. The native surface is minimal: build iteratively, write, load, top-k and radial
- * query (both with an optional pre-filter), and free.
+ * JNI binding for the isolated Intel SVS native library ({@code libopensearchknn_svs}).
  */
 @Log4j2
 public class SvsService {
 
-    /** Base name of the SVS JNI library; variant suffixes (_avx512_spr, etc.) are appended by the loader. */
     private static final String SVS_JNI_LIBRARY_NAME = "opensearchknn_svs";
 
     static {
-        // System.loadLibrary is centralized in KNNLibraryLoader (enforced by the validateLibraryUsage task).
         KNNLibraryLoader.loadLibraryByVariant(SVS_JNI_LIBRARY_NAME);
         initLibrary();
-        // Mark the registered engine initialized, mirroring how FaissService marks FAISS initialized.
         KNNEngine.getEngine(SVSConstants.SVS_ENGINE_NAME).setInitialized(true);
         try {
             MergeAbortChecker.isMergeAborted();
@@ -42,9 +35,6 @@ public class SvsService {
         }
     }
 
-    /**
-     * Whether this SVS runtime supports LVQ/LeanVec compression (requires Intel AVX-512 SIMD support).
-     */
     public static native boolean isLvqLeanvecEnabled();
 
     public static native long initIndex(long numDocs, int dim, Map<String, Object> parameters);

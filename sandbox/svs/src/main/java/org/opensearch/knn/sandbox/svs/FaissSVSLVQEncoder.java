@@ -21,17 +21,13 @@ import static org.opensearch.knn.sandbox.svs.SVSConstants.METHOD_PARAMETER_LVQ_P
 import static org.opensearch.knn.sandbox.svs.SVSConstants.METHOD_PARAMETER_LVQ_RESIDUAL_BITS;
 
 /**
- * LVQ (Locally-adaptive Vector Quantization) encoder for SVS indexes, with {@code primary_bits} and
- * {@code residual_bits} parameters (both default 4). Only the combinations the SVS runtime's
- * {@code SVSStorageKind} supports, {@code (4,0)}, {@code (4,4)} and {@code (4,8)}, are accepted; others are
- * rejected at index creation rather than failing deep in native code.
+ * LVQ encoder for SVS indexes: {@code primary_bits} x {@code residual_bits}, supported 4x0, 4x4, 4x8.
  */
 public class FaissSVSLVQEncoder implements Encoder {
 
     static final int DEFAULT_PRIMARY_BITS = 4;
     static final int DEFAULT_RESIDUAL_BITS = 4;
 
-    /** Supported (primary_bits, residual_bits) combinations, mirroring the SVS {@code SVSStorageKind} LVQ kinds. */
     private static final Set<String> SUPPORTED_BIT_COMBINATIONS = Set.of("4x0", "4x4", "4x8");
 
     private final static MethodComponent METHOD_COMPONENT = MethodComponent.Builder.builder(FAISS_SVS_ENCODER_LVQ)
@@ -56,7 +52,6 @@ public class FaissSVSLVQEncoder implements Encoder {
                 methodComponentContext,
                 knnMethodConfigContext
             );
-            // Builds the "LVQ{primary}x{residual}" token, e.g. "LVQ4x4".
             builder.addParameter(METHOD_PARAMETER_LVQ_PRIMARY_BITS, "", "x");
             builder.addParameter(METHOD_PARAMETER_LVQ_RESIDUAL_BITS, "", "");
             return builder.build();
@@ -86,14 +81,11 @@ public class FaissSVSLVQEncoder implements Encoder {
         }
     }
 
-    // Package-private: the LeanVec encoder shares the LVQ platform gate (LeanVec storage is LVQ-backed).
     static void validatePlatformSupportsLvq() {
         final boolean lvqEnabled;
         try {
             lvqEnabled = SvsService.isLvqLeanvecEnabled();
         } catch (UnsatisfiedLinkError | ExceptionInInitializerError | NoClassDefFoundError e) {
-            // The check is the first native touch on this node; a library that cannot load must surface as a
-            // mapping validation error, not as a raw linkage error through the mapping API.
             throw new IllegalArgumentException(
                 String.format(
                     Locale.ROOT,
@@ -129,7 +121,7 @@ public class FaissSVSLVQEncoder implements Encoder {
         int primaryBits = readBits(encoderContext, METHOD_PARAMETER_LVQ_PRIMARY_BITS, DEFAULT_PRIMARY_BITS);
         int residualBits = readBits(encoderContext, METHOD_PARAMETER_LVQ_RESIDUAL_BITS, DEFAULT_RESIDUAL_BITS);
         int totalBits = primaryBits + residualBits;
-        // Map 32/total_bits to the nearest supported CompressionLevel; 4x8 (~2.67x) has no exact enum, use x4.
+        // 4x8 (~2.67x) has no exact level; report x4.
         if (totalBits <= 4) {
             return CompressionLevel.x8;
         }
@@ -138,15 +130,12 @@ public class FaissSVSLVQEncoder implements Encoder {
 
     @Override
     public Set<QuantizationBits> getSupportedBits() {
-        // Mapped by compression level (the enum has no LVQ widths): 4x0 is x8 (FOUR), 4x4/4x8 report x4
-        // (SEVEN), mirroring calculateCompressionLevel.
         return EnumSet.of(QuantizationBits.FOUR, QuantizationBits.SEVEN);
     }
 
     @Override
     public EncoderType getEncoderType() {
-        // The classification enum is closed (FLAT/SQ/PQ/BQ); LVQ is per-vector scalar quantization, so
-        // SQ is the closest fit. An open classification for registered-engine encoders is a core follow-up.
+        // Closest fit in the closed enum.
         return EncoderType.SQ;
     }
 

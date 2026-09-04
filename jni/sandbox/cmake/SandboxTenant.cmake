@@ -68,22 +68,10 @@ endfunction()
 #     [GIT_REPOSITORY <url>]              # default: upstream facebookresearch/faiss
 #     [CMAKE_ARGS <-DFAISS_...=...>...]   # tenant-specific extras, e.g. an optional faiss feature flag
 # )
-#
-# Builds the tenant its OWN faiss: an upstream checkout at the tenant's own pinned commit, deliberately NOT
-# the k-NN submodule (jni/external/faiss) and with none of k-NN's faiss patches applied. This is how a
-# tenant exposes index types that exist in faiss mainstream but not in the k-NN pin. The build is static
-# (POSITION_INDEPENDENT_CODE) in its own binary tree, so its faiss* CMake targets never collide with the
-# main add_subdirectory(external/faiss) build. The tenant statically embeds the result, kept private by the
-# knn_sandbox_add_jni_library isolation recipe above, so it coexists with the different-version faiss inside
-# libopensearchknn_faiss in the same JVM.
-#
-# The host SIMD variant (avx512_spr / avx512 / avx2 / generic) is selected the same way init-faiss.cmake
-# selects it for the built-in faiss, so the tenant links a variant matching the CPU it runs on.
-#
-# Exports to the caller:
-#   <prefix>_INCLUDE_DIR   - include dir for <faiss/...> headers (the vendored source tree)
-#   <prefix>_LINK_LIB      - IMPORTED static lib target (BLAS/LAPACK supplied on its INTERFACE) to pass to
-#                            knn_sandbox_add_jni_library(... LINK_LIBRARIES ${<prefix>_LINK_LIB})
+# Builds the tenant its own upstream faiss (static, PIC, at the pinned commit, no k-NN patches) for the
+# tenant to embed privately via knn_sandbox_add_jni_library. Exports to the caller:
+#   <prefix>_INCLUDE_DIR   - include dir for <faiss/...> headers
+#   <prefix>_LINK_LIB      - IMPORTED static lib target (BLAS/LAPACK/OpenMP supplied on its INTERFACE)
 #   <prefix>_EP_TARGET     - the ExternalProject target to pass as DEPENDS
 # ---------------------------------------------------------------------------------------------------------
 function(knn_sandbox_vendor_faiss prefix)
@@ -96,7 +84,6 @@ function(knn_sandbox_vendor_faiss prefix)
         set(VENDOR_GIT_REPOSITORY "https://github.com/facebookresearch/faiss.git")
     endif()
 
-    # Pick the host opt-level / faiss variant the same way init-faiss.cmake does.
     if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "(aarch64|arm64|ARM64)")
         set(_vendor_opt_level generic)
         set(_vendor_variant faiss)
@@ -117,7 +104,6 @@ function(knn_sandbox_vendor_faiss prefix)
     set(_vendor_prefix   "${CMAKE_BINARY_DIR}/${prefix}")
     set(_vendor_src      "${_vendor_prefix}/src/${prefix}_ep")
     set(_vendor_build    "${_vendor_prefix}/src/${prefix}_ep-build")
-    # faiss emits its static libs under <build>/faiss/.
     set(_vendor_lib_path "${_vendor_build}/faiss/${CMAKE_STATIC_LIBRARY_PREFIX}${_vendor_variant}${CMAKE_STATIC_LIBRARY_SUFFIX}")
 
     ExternalProject_Add(${prefix}_ep
@@ -135,15 +121,11 @@ function(knn_sandbox_vendor_faiss prefix)
             -DFAISS_ENABLE_C_API=OFF
             -DFAISS_OPT_LEVEL=${_vendor_opt_level}
             ${VENDOR_CMAKE_ARGS}
-        # Only the static lib is needed; faiss has no usable install step for a static, isolated embed.
         INSTALL_COMMAND   ""
         BUILD_BYPRODUCTS  "${_vendor_lib_path}"
     )
 
-    # faiss links BLAS/LAPACK and OpenMP transitively; embedding the static .a means re-supplying those on
-    # the tenant's link line. All three ride the imported target's INTERFACE, so a tenant that only links
-    # ${prefix}_LINK_LIB gets a complete link line; a tenant with its own vendored runtime adds that itself
-    # via LINK_LIBRARIES.
+    # Embedding the static faiss means re-supplying BLAS/LAPACK/OpenMP on the tenant's link line.
     find_package(BLAS REQUIRED)
     find_package(LAPACK REQUIRED)
     find_package(OpenMP REQUIRED)

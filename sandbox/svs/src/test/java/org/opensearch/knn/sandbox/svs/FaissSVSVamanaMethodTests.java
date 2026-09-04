@@ -39,9 +39,6 @@ public class FaissSVSVamanaMethodTests extends OpenSearchTestCase {
         return KNNMethodConfigContext.builder().versionCreated(Version.CURRENT).vectorDataType(VectorDataType.FLOAT).dimension(128).build();
     }
 
-    /**
-     * Sanity-checks the names users type in mappings; they are part of the method's public contract.
-     */
     public void testPublicNames_methodAndEncoderParameters() {
         assertEquals("svs_vamana", METHOD_SVS_VAMANA);
         assertEquals("lvq", FAISS_SVS_ENCODER_LVQ);
@@ -60,7 +57,6 @@ public class FaissSVSVamanaMethodTests extends OpenSearchTestCase {
         assertTrue(FaissSVSVamanaMethod.SUPPORTED_ENCODERS.containsKey(ENCODER_FLAT));
         assertTrue(FaissSVSVamanaMethod.SUPPORTED_ENCODERS.containsKey(FAISS_SVS_ENCODER_LVQ));
         assertTrue(FaissSVSVamanaMethod.SUPPORTED_ENCODERS.containsKey(SVSConstants.FAISS_SVS_ENCODER_LEANVEC));
-        // Old svs_-prefixed encoder names must no longer be registered.
         assertFalse(FaissSVSVamanaMethod.SUPPORTED_ENCODERS.containsKey("svs_fp16"));
         assertFalse(FaissSVSVamanaMethod.SUPPORTED_ENCODERS.containsKey("svs_sq8"));
         assertEquals(4, FaissSVSVamanaMethod.SUPPORTED_ENCODERS.size());
@@ -123,10 +119,6 @@ public class FaissSVSVamanaMethodTests extends OpenSearchTestCase {
         return (String) indexingContext.getLibraryParameters().get(INDEX_DESCRIPTION_PARAMETER);
     }
 
-    /**
-     * The index description is the contract with the native faiss factory; pin its exact assembly. The
-     * default (flat) encoder's trailing ",Flat" token must be dropped because SVS's factory rejects it.
-     */
     public void testIndexDescription_whenDefaultFlatEncoder_thenTrailingFlatDropped() {
         assertEquals(
             "SVSVamana64",
@@ -147,12 +139,9 @@ public class FaissSVSVamanaMethodTests extends OpenSearchTestCase {
                 )
             );
         } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
-            // The LVQ generator runs the encoder's platform check, which needs the SVS native library; in a
-            // pure-JVM unit run there is none to load. The LVQ description is asserted end-to-end by the IT.
+            // The generator runs the native platform check; skip without the library (the IT covers it).
             org.junit.Assume.assumeNoException("LVQ platform check needs the SVS native library", e);
         } catch (IllegalArgumentException e) {
-            // The platform gate now wraps a library linkage failure into a validation error; skip only for
-            // that cause so genuine validation failures still fail the test.
             if (e.getCause() instanceof LinkageError == false) {
                 throw e;
             }
@@ -182,8 +171,6 @@ public class FaissSVSVamanaMethodTests extends OpenSearchTestCase {
         } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
             org.junit.Assume.assumeNoException("LeanVec platform check needs the SVS native library", e);
         } catch (IllegalArgumentException e) {
-            // The platform gate now wraps a library linkage failure into a validation error; skip only for
-            // that cause so genuine validation failures still fail the test.
             if (e.getCause() instanceof LinkageError == false) {
                 throw e;
             }
@@ -203,8 +190,6 @@ public class FaissSVSVamanaMethodTests extends OpenSearchTestCase {
         } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
             org.junit.Assume.assumeNoException("LeanVec platform check needs the SVS native library", e);
         } catch (IllegalArgumentException e) {
-            // The platform gate now wraps a library linkage failure into a validation error; skip only for
-            // that cause so genuine validation failures still fail the test.
             if (e.getCause() instanceof LinkageError == false) {
                 throw e;
             }
@@ -223,12 +208,7 @@ public class FaissSVSVamanaMethodTests extends OpenSearchTestCase {
     }
 
     /**
-     * Every tenant encoder name must survive mapping-time index-spec resolution. The AbstractKNNMethod
-     * default rejects names outside the closed EncoderType enum ("Unsupported encoder type: [leanvec]"),
-     * which is exactly the regression this pins: the method overrides the resolution and classifies
-     * lvq/leanvec as SQ with memory-optimized search pinned off. flat/sq run the full public path;
-     * lvq/leanvec pin the spec builder directly because the full path runs the encoders' native
-     * AVX-512 platform check, which unit tests cannot load.
+     * Every encoder name must survive index-spec resolution (the core default rejects lvq/leanvec).
      */
     public void testIndexingContext_resolvesForEveryEncoder() {
         for (String encoderName : new String[] { ENCODER_FLAT, ENCODER_SQ }) {

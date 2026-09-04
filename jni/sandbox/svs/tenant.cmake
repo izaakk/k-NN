@@ -2,17 +2,9 @@
 # Copyright OpenSearch Contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Native build for the experimental Intel SVS tenant (libopensearchknn_svs).
-# Included by jni/sandbox/tenants.cmake only when -DCONFIG_SANDBOX=ON.
-#
-# The tenant vendors its own upstream faiss, pinned to an SVS-capable commit and built with
-# FAISS_ENABLE_SVS=ON exactly as upstream ships it (no k-NN patches). Every vendored symbol stays private to
-# this library (hidden visibility + --exclude-libs), so it coexists in one JVM with the different-version
-# faiss inside libopensearchknn_faiss.
+# Native build for the Intel SVS tenant (libopensearchknn_svs): its own SVS-enabled upstream faiss plus the
+# prebuilt Intel SVS runtime.
 
-# Provide the prebuilt Intel SVS runtime (conda-forge libsvs-runtime, sha256-pinned; override with
-# -DSVS_RUNTIME_PREFIX / -DSVS_RUNTIME_URL via -Psandbox.cmake.args). Sets SVS_RUNTIME_PREFIX and resolves
-# find_package(svs_runtime) for this build.
 include(${KNN_SANDBOX_TENANT_DIR}/cmake/fetch-svs-runtime.cmake)
 
 knn_sandbox_vendor_faiss(svs_faiss
@@ -42,8 +34,6 @@ knn_sandbox_add_jni_library(opensearchknn_svs
 
 target_compile_definitions(opensearchknn_svs PRIVATE FAISS_ENABLE_SVS FAISS_SVS_RUNTIME_VERSION=v0)
 
-# Install the SVS runtime beside the JNI libraries so the $ORIGIN rpath resolves it in any deployment
-# (the build tree's absolute link path must never be relied on).
 add_custom_command(TARGET opensearchknn_svs POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${SVS_RUNTIME_PREFIX}/lib/libsvs_runtime.so.0 ${CMAKE_BINARY_DIR}/release/

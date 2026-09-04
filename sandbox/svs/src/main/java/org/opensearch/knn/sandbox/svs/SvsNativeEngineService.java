@@ -17,13 +17,8 @@ import org.opensearch.knn.sandbox.AbstractNativeEngineService;
 import static org.opensearch.knn.sandbox.svs.SVSConstants.INDEX_THREAD_QTY_KEY;
 
 /**
- * {@link NativeEngineService} for the experimental Intel SVS engine. Routes every native index operation to
- * {@link SvsService} (the isolated {@code libopensearchknn_svs}), keeping all native lifecycle behind the
- * generic core SPI so the core {@code JNIService} holds no compile-time reference to SVS.
- *
- * <p>Operations outside the SVS scope (template builds, nested queries) throw
- * {@link UnsupportedOperationException}; the corresponding capability checks in the core already exclude this
- * engine, so these are defensive backstops.
+ * {@link NativeEngineService} for the Intel SVS engine: routes every native index operation to
+ * {@link SvsService} (the isolated {@code libopensearchknn_svs}).
  */
 public class SvsNativeEngineService extends AbstractNativeEngineService {
 
@@ -54,10 +49,7 @@ public class SvsNativeEngineService extends AbstractNativeEngineService {
 
     @Override
     public KNNQueryResult[] queryIndex(long indexPointer, NativeSearchParams params) {
-        if (ArrayUtils.isNotEmpty(params.parentIds())) {
-            // Reject rather than silently ignore parentIds, which would return multiple children per parent.
-            throw new UnsupportedOperationException("Nested fields are not supported by the experimental SVS engine");
-        }
+        rejectParentIds(params);
         if (ArrayUtils.isNotEmpty(params.filteredIds())) {
             return SvsService.queryIndexWithFilter(
                 indexPointer,
@@ -73,15 +65,10 @@ public class SvsNativeEngineService extends AbstractNativeEngineService {
 
     @Override
     public KNNQueryResult[] radiusQueryIndex(long indexPointer, NativeSearchParams params) {
-        if (ArrayUtils.isNotEmpty(params.parentIds())) {
-            // Reject rather than silently ignore parentIds, which would return multiple children per parent.
-            throw new UnsupportedOperationException("Nested fields are not supported by the experimental SVS engine");
-        }
+        rejectParentIds(params);
         final float radius = params.radius();
         if (radius <= 0) {
-            // The SVS index only accepts a strictly positive faiss-domain radius. Core converts the
-            // user-facing threshold per space type (Faiss#distanceToRadialThreshold/#scoreToRadialThreshold),
-            // so this rejects e.g. inner-product max_distance >= 0 or cosine min_score <= 0.5.
+            // Backstop: SvsLibrary rejects this at query build; SVS requires a strictly positive radius.
             throw new UnsupportedOperationException(
                 "The SVS engine does not support radial thresholds that resolve to a non-positive radius "
                     + "(converted radius was "
@@ -112,5 +99,11 @@ public class SvsNativeEngineService extends AbstractNativeEngineService {
     @Override
     public void free(long indexPointer) {
         SvsService.free(indexPointer);
+    }
+
+    private static void rejectParentIds(NativeSearchParams params) {
+        if (ArrayUtils.isNotEmpty(params.parentIds())) {
+            throw new UnsupportedOperationException("Nested fields are not supported by the experimental SVS engine");
+        }
     }
 }

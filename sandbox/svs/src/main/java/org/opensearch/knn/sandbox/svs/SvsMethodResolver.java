@@ -36,21 +36,15 @@ import static org.opensearch.knn.sandbox.svs.SVSConstants.METHOD_SVS_VAMANA;
 import static org.opensearch.knn.common.KNNConstants.ENCODER_SQ;
 
 /**
- * {@link org.opensearch.knn.index.engine.MethodResolver} for the experimental SVS engine. The sole method is
- * {@code svs_vamana}; this resolver fills in its defaults, maps a user-supplied {@code compression_level} to
- * the SVS encoders ({@code 2x} -> {@code sq}(fp16), {@code 4x} -> {@code lvq}(4,4), {@code 8x} ->
- * {@code lvq}(4,0)) and rejects configurations SVS cannot serve ({@code on_disk} mode, training contexts,
- * unsupported compression levels). It lives entirely in the sandbox: the core Faiss resolver knows nothing
- * about SVS.
+ * {@link org.opensearch.knn.index.engine.MethodResolver} for the SVS engine. Maps {@code compression_level}
+ * to an encoder: {@code 2x} -> {@code sq}(fp16), {@code 4x} -> {@code lvq}(4,4), {@code 8x} -> {@code lvq}(4,0).
  */
 public class SvsMethodResolver extends AbstractMethodResolver {
 
-    // The SVS engine instance, resolved by name from the engine registry (no reserved core enum slot).
     private static KNNEngine svsEngine() {
         return KNNEngine.getEngine(SVSConstants.SVS_ENGINE_NAME);
     }
 
-    // x4 maps to lvq(4,4); the core engines top out differently (no x4) and support higher levels SVS does not.
     private static final Set<CompressionLevel> SUPPORTED_COMPRESSION_LEVELS = Set.of(
         CompressionLevel.x1,
         CompressionLevel.x2,
@@ -91,7 +85,6 @@ public class SvsMethodResolver extends AbstractMethodResolver {
 
         Map<String, Encoder> encoderMap = FaissSVSVamanaMethod.SUPPORTED_ENCODERS;
 
-        // Fill in parameters for the encoder and then the method.
         resolveEncoder(resolvedKNNMethodContext, knnMethodConfigContext, encoderMap);
         CompressionLevel resolvedCompressionLevel = resolveCompressionLevelFromMethodContext(
             resolvedKNNMethodContext,
@@ -101,9 +94,7 @@ public class SvsMethodResolver extends AbstractMethodResolver {
 
         validateEncoderConfig(resolvedKNNMethodContext, knnMethodConfigContext, encoderMap);
         validateCompressionConflicts(knnMethodConfigContext.getCompressionLevel(), resolvedCompressionLevel);
-        // The LeanVec encoder resolves to NOT_CONFIGURED (its ratio depends on the reduced dimensionality), which
-        // makes the generic conflict check above a no-op: a user-configured compression_level would be silently
-        // dropped instead of rejected as it is for every other encoder.
+        // leanvec resolves to NOT_CONFIGURED, which makes the generic conflict check above a no-op.
         if (CompressionLevel.isConfigured(knnMethodConfigContext.getCompressionLevel())
             && CompressionLevel.isConfigured(resolvedCompressionLevel) == false) {
             ValidationException validationException = new ValidationException();

@@ -15,28 +15,16 @@ import org.opensearch.knn.index.engine.ResolvedMethodContext;
 import org.opensearch.knn.index.engine.faiss.Faiss;
 import org.opensearch.knn.memoryoptsearch.VectorSearcherFactory;
 
+import java.util.Locale;
 import java.util.Map;
 
 /**
- * The {@link org.opensearch.knn.index.engine.KNNLibrary} for the experimental Intel SVS engine. SVS indices
- * are faiss-format ({@code IndexSVSVamana} is a {@code faiss::Index}), so this library reuses faiss's scoring
- * and only differs where it must:
- * <ul>
- *   <li>its file {@link #getExtension() extension} is {@code .svs} (so the codec writes/reads SVS files
- *       distinctly, and the load path routes them to the SVS engine by extension);</li>
- *   <li>its sole method is {@code svs_vamana} (it does not expose HNSW/IVF);</li>
- *   <li>it provides no memory-optimized searcher, so queries go through the native SVS graph search in
- *       {@code libopensearchknn_svs} rather than reading vectors directly.</li>
- * </ul>
- * This library lives in the sandbox; main reaches it only as a registered {@code KNNEngine} via the
- * {@code KNNEngineDefinition} SPI.
+ * {@link org.opensearch.knn.index.engine.KNNLibrary} for the experimental Intel SVS engine. SVS indices are
+ * faiss-format, so scoring and radial-threshold translation delegate to faiss; the library differs in its
+ * {@code .svs} extension, its single {@code svs_vamana} method, and the absence of a memory-optimized searcher.
  */
 public class SvsLibrary extends NativeLibrary {
 
-    // Compatibility version tag baked into the segment file name. "165" mirrored core faiss; "166" marks the
-    // SVS serialization break introduced with static Vamana (the vendored faiss reads an is_static field
-    // unconditionally), so files from earlier sandbox builds are distinguishable by name. Note the reader
-    // discovers files by segment prefix and field suffix, not by this tag: old segments still need a reindex.
     private static final String CURRENT_VERSION = "166";
 
     private final MethodResolver methodResolver = new SvsMethodResolver();
@@ -44,7 +32,6 @@ public class SvsLibrary extends NativeLibrary {
     public static final SvsLibrary INSTANCE = new SvsLibrary();
 
     private SvsLibrary() {
-        // score translation is delegated to faiss below, so the base map is empty.
         super(
             Map.<String, KNNMethod>of(SVSConstants.METHOD_SVS_VAMANA, new FaissSVSVamanaMethod()),
             Map.of(),
@@ -60,12 +47,28 @@ public class SvsLibrary extends NativeLibrary {
 
     @Override
     public Float distanceToRadialThreshold(Float distance, SpaceType spaceType) {
-        return Faiss.INSTANCE.distanceToRadialThreshold(distance, spaceType);
+        return requirePositiveRadius(Faiss.INSTANCE.distanceToRadialThreshold(distance, spaceType), spaceType);
     }
 
     @Override
     public Float scoreToRadialThreshold(Float score, SpaceType spaceType) {
-        return Faiss.INSTANCE.scoreToRadialThreshold(score, spaceType);
+        return requirePositiveRadius(Faiss.INSTANCE.scoreToRadialThreshold(score, spaceType), spaceType);
+    }
+
+    // The SVS index only accepts a strictly positive faiss-domain radius; reject at query build (400).
+    static Float requirePositiveRadius(Float radius, SpaceType spaceType) {
+        if (radius != null && radius <= 0) {
+            throw new IllegalArgumentException(
+                String.format(
+                    Locale.ROOT,
+                    "The SVS engine does not support radial thresholds that resolve to a non-positive radius "
+                        + "(converted radius was %s for space type [%s]); use a stricter max_distance/min_score",
+                    radius,
+                    spaceType.getValue()
+                )
+            );
+        }
+        return radius;
     }
 
     @Override
@@ -80,33 +83,27 @@ public class SvsLibrary extends NativeLibrary {
 
     @Override
     public VectorSearcherFactory getVectorSearcherFactory() {
-        // No memory-optimized (direct-vector) search for SVS: queries must run through the native SVS graph.
         return null;
     }
 
     @Override
     public boolean supportsIterativeBuild() {
-        // SVS builds incrementally (init + insert batches + write) via its own native lib, mirroring faiss.
         return true;
     }
 
     @Override
     public boolean createsCustomSegmentFiles() {
-        // SVS writes its own .svs native segment files.
         return true;
     }
 
     @Override
     public boolean supportsFilters() {
-        // SVS supports pre-filtered k-NN search.
         return true;
     }
 
     @Override
     public boolean supportsRadialSearch() {
-        // Radial search runs natively through IndexSVSVamana#range_search. The SVS index only accepts a
-        // strictly positive faiss-domain radius, so the inner-product/cosine thresholds that convert to a
-        // non-positive radius are rejected at query time by SvsNativeEngineService.
+        // Native range_search; non-positive faiss-domain radii are rejected at query build.
         return true;
     }
 }

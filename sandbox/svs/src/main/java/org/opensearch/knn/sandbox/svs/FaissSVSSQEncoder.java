@@ -26,10 +26,7 @@ import static org.opensearch.knn.sandbox.svs.SVSConstants.FAISS_SVS_SQ_TYPE_FP16
 import static org.opensearch.knn.sandbox.svs.SVSConstants.FAISS_SVS_SQ_TYPE_SQ8;
 
 /**
- * Scalar-quantization encoder for SVS Vamana, exposed as the unified {@code sq} encoder (matching the HNSW
- * convention) with a {@code type} parameter: {@code fp16} (default, x2) or {@code sq8} (x4). Unlike the main
- * {@link org.opensearch.knn.index.engine.faiss.FaissSQEncoder} it has no Lucene {@code bits} path; SVS
- * quantization is performed natively.
+ * {@code sq} encoder for SVS Vamana: {@code type} is {@code fp16} (default, x2) or {@code sq8} (x4).
  */
 public class FaissSVSSQEncoder implements Encoder {
 
@@ -41,8 +38,7 @@ public class FaissSVSSQEncoder implements Encoder {
             FAISS_SVS_SQ_TYPE,
             new Parameter.StringParameter(FAISS_SVS_SQ_TYPE, FAISS_SVS_SQ_TYPE_FP16, (v, context) -> SUPPORTED_TYPES.contains(v))
         )
-        // 'bits' is the HNSW sq knob, not ours. Declared (null default) only so a user who passes it gets the
-        // targeted message from validateNoBitsParameter, not a generic "unknown parameter" rejection.
+        // Declared only so a user passing the HNSW sq 'bits' knob gets a targeted message.
         .addParameter(SQ_BITS, new Parameter.IntegerParameter(SQ_BITS, null, (v, context) -> true))
         .setKnnLibraryIndexingContextGenerator(((methodComponent, methodComponentContext, knnMethodConfigContext) -> {
             validateNoBitsParameter(methodComponentContext);
@@ -54,15 +50,10 @@ public class FaissSVSSQEncoder implements Encoder {
         }))
         .build();
 
-    /**
-     * Rejects the HNSW sq encoder's {@code bits} parameter with a targeted message; SVS sq selects precision
-     * via {@code type} and has no bit-width knob.
-     */
     static void validateNoBitsParameter(MethodComponentContext methodComponentContext) {
         if (methodComponentContext == null) {
             return;
         }
-        // Only a user-supplied (non-null) bits triggers the message, not the null default from the whitelist.
         if (methodComponentContext.getParameters().get(SQ_BITS) != null) {
             throw new IllegalArgumentException(
                 String.format(
@@ -101,8 +92,6 @@ public class FaissSVSSQEncoder implements Encoder {
 
     @Override
     public Set<QuantizationBits> getSupportedBits() {
-        // Mapped by compression level (the enum has no EIGHT): sq8 is x4 (SEVEN), fp16 is x2 (SIXTEEN),
-        // mirroring calculateCompressionLevel.
         return EnumSet.of(QuantizationBits.SEVEN, QuantizationBits.SIXTEEN);
     }
 

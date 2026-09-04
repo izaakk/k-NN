@@ -10,16 +10,11 @@
 #include <string>
 
 namespace knn_jni {
-    // Intel SVS Vamana parameter names. These live ONLY in the isolated SVS JNI library
-    // (libopensearchknn_svs); the main faiss JNI library carries no SVS symbols. They were
-    // intentionally removed from jni_util when SVS was pulled out of the shared layer.
     extern const std::string CONSTRUCTION_WINDOW_SIZE;
     extern const std::string ALPHA;
     extern const std::string SEARCH_WINDOW_SIZE;
     extern const std::string SEARCH_BUFFER_CAPACITY;
 
-    // Deferred-training LeanVec: the encoder sub-map key and its threshold parameters, plus the
-    // fork-proven defaults applied when the parameters are absent or 0.
     extern const std::string ENCODER;
     extern const std::string LEANVEC_TRAINING_THRESHOLD;
     extern const std::string LEANVEC_ROUGH_TRAINING_THRESHOLD;

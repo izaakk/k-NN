@@ -26,23 +26,15 @@ import static org.opensearch.knn.sandbox.svs.SVSConstants.METHOD_PARAMETER_LVQ_P
 import static org.opensearch.knn.sandbox.svs.SVSConstants.METHOD_PARAMETER_LVQ_RESIDUAL_BITS;
 
 /**
- * LeanVec encoder for SVS indexes: a learned dimensionality-reducing projection over LVQ storage, trained
- * <b>deferred</b> at segment-build time (no Train API, no model registry). The native layer applies a
- * per-segment quality ladder driven by two thresholds: segments under {@code rough_training_threshold} build
- * as the equivalent LVQ index (training-free fallback); between the thresholds the projection trains on the
- * whole segment; at or above {@code training_threshold} it trains on a {@code training_threshold}-sized
- * sample. Merges re-train, so quality upgrades monotonically with segment size.
- *
- * <p>Parameters: {@code primary_bits}x{@code residual_bits} select the LeanVec storage kind (supported:
- * 4x4, 4x8, 8x8); {@code dimensions} sets the reduced dimensionality (0, the default, lets the SVS runtime
- * pick {@code dim/2}); the two threshold parameters tune the ladder (0 = use the built-in default).
+ * LeanVec encoder for SVS indexes: a learned dimensionality-reducing projection over LVQ storage, trained at
+ * segment-build time. {@code primary_bits} x {@code residual_bits} (4x4, 4x8, 8x8), {@code dimensions}, and the
+ * two training thresholds that drive the per-segment ladder (see the tenant README).
  */
 public class FaissSVSLeanVecEncoder implements Encoder {
 
     static final int DEFAULT_PRIMARY_BITS = 4;
     static final int DEFAULT_RESIDUAL_BITS = 8;
 
-    /** Supported (primary_bits, residual_bits) combinations, mirroring the SVS {@code SVSStorageKind} LeanVec kinds. */
     private static final Set<String> SUPPORTED_BIT_COMBINATIONS = Set.of("4x4", "4x8", "8x8");
 
     private final static MethodComponent METHOD_COMPONENT = MethodComponent.Builder.builder(FAISS_SVS_ENCODER_LEANVEC)
@@ -57,9 +49,6 @@ public class FaissSVSLeanVecEncoder implements Encoder {
         )
         .addParameter(
             METHOD_PARAMETER_LEANVEC_DIMENSIONS,
-            // 0 = runtime default (dim/2). A value above the field dimension cannot be a reduction; without
-            // this bound it is accepted at mapping time and only fails inside the native training at the
-            // first merge above the training threshold (small segments strip the suffix via the LVQ rewrite).
             new Parameter.IntegerParameter(
                 METHOD_PARAMETER_LEANVEC_DIMENSIONS,
                 0,
@@ -98,16 +87,14 @@ public class FaissSVSLeanVecEncoder implements Encoder {
                 methodComponentContext,
                 knnMethodConfigContext
             );
-            // Builds the "LeanVec{primary}x{residual}" token, e.g. "LeanVec4x8".
             builder.addParameter(METHOD_PARAMETER_LVQ_PRIMARY_BITS, "", "x");
             builder.addParameter(METHOD_PARAMETER_LVQ_RESIDUAL_BITS, "", "");
-            // Optional reduced dimensionality: "LeanVec4x8_192". 0 = let the runtime default to dim/2.
+            // 0 = runtime default (dim/2).
             Object dimensions = methodComponentContext.getParameters().get(METHOD_PARAMETER_LEANVEC_DIMENSIONS);
             if (dimensions instanceof Integer && (Integer) dimensions > 0) {
                 builder.addParameter(METHOD_PARAMETER_LEANVEC_DIMENSIONS, "_", "");
             }
-            // The threshold parameters are not description tokens; they stay in the encoder parameter map,
-            // which the native InitIndex reads to drive the deferred-training ladder.
+            // Thresholds travel in the parameter map, not the description.
             return builder.build();
         }))
         .build();
@@ -163,20 +150,16 @@ public class FaissSVSLeanVecEncoder implements Encoder {
         MethodComponentContext encoderContext,
         KNNMethodConfigContext knnMethodConfigContext
     ) {
-        // Compression varies with the reduced dimensionality and bit widths; do not claim a fixed level.
         return CompressionLevel.NOT_CONFIGURED;
     }
 
     @Override
     public Set<QuantizationBits> getSupportedBits() {
-        // LVQ-style widths under the LeanVec projection; effective compression additionally depends on
-        // the reduced dimensionality, so calculateCompressionLevel reports NOT_CONFIGURED.
         return EnumSet.of(QuantizationBits.FOUR, QuantizationBits.SEVEN);
     }
 
     @Override
     public EncoderType getEncoderType() {
-        // See FaissSVSLVQEncoder: closed enum, LVQ-style scalar quantization under a projection.
         return EncoderType.SQ;
     }
 

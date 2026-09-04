@@ -53,7 +53,6 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
 
     public final static List<SpaceType> SUPPORTED_SPACES = Arrays.asList(SpaceType.L2, SpaceType.INNER_PRODUCT, SpaceType.COSINESIMIL);
 
-    // FLAT, SQ (fp16/sq8), LVQ, and LeanVec (deferred training at segment-build time; no Train API needed).
     public final static Map<String, Encoder> SUPPORTED_ENCODERS = Map.of(
         ENCODER_FLAT,
         new FaissFlatEncoder(),
@@ -74,11 +73,8 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
     }
 
     /**
-     * The {@code AbstractKNNMethod} default resolves the encoder name through the closed
-     * {@code Encoder.EncoderType} enum, which rejects registered-engine encoders (lvq, leanvec) at
-     * mapping-parse time. Per the sandbox contract a tenant method supplies its own
-     * {@link ResolvedIndexSpec} instead (see {@code FixtureMethod}); everything else mirrors the
-     * default implementation.
+     * Mirrors the {@code AbstractKNNMethod} default but builds the {@link ResolvedIndexSpec} itself: the default
+     * resolves encoder names through the closed {@code Encoder.EncoderType} enum, which rejects lvq/leanvec.
      */
     @Override
     public KNNLibraryIndexingContext getKNNLibraryIndexingContext(
@@ -104,8 +100,6 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
             .build();
     }
 
-    // Package-private: the unit test pins lvq/leanvec classification here directly, because the
-    // full indexing-context path runs the encoders' native AVX-512 platform check.
     static ResolvedIndexSpec buildSvsResolvedSpec(KNNMethodContext methodContext, KNNMethodConfigContext configContext) {
         Encoder.EncoderType encoderType = Encoder.EncoderType.FLAT;
         Encoder.QuantizationBits quantizationBits = Encoder.QuantizationBits.FULL_PRECISION;
@@ -123,8 +117,7 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
                     ? Encoder.QuantizationBits.SEVEN
                     : Encoder.QuantizationBits.SIXTEEN;
             } else {
-                // lvq / leanvec: the classification enum is closed, SQ is the closest fit (scalar
-                // quantization per vector); bits mapped by compression level as in getSupportedBits.
+                // lvq / leanvec: closest fit in the closed enum.
                 encoderType = Encoder.EncoderType.SQ;
                 quantizationBits = Encoder.QuantizationBits.SEVEN;
             }
@@ -145,9 +138,6 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
             .vectorDataType(configContext.getVectorDataType())
             .dimension(dimension != null ? dimension : 0)
             .indexVersionCreated(configContext.getVersionCreated())
-            // SVS serves search from its own native index; the faiss memory-optimized (partial loading)
-            // path never applies. The default already excludes non-faiss engines; pin it explicitly so
-            // the SQ classification above can never opt this engine in.
             .memoryOptimizedEligibleOverride(Boolean.FALSE)
             .build();
     }
@@ -175,8 +165,7 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
                 METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY,
                 new Parameter.IntegerParameter(METHOD_PARAMETER_SEARCH_BUFFER_CAPACITY, 10, (v, context) -> v > 0)
             )
-            // alpha controls Vamana graph pruning aggressiveness. Default is null: when unset the SVS
-            // runtime applies a metric-dependent default (1.2 for L2, 0.95 for inner product).
+            // null default: the runtime applies its metric-dependent alpha.
             .addParameter(METHOD_PARAMETER_ALPHA, new Parameter.DoubleParameter(METHOD_PARAMETER_ALPHA, null, (v, context) -> v > 0))
             .addParameter(
                 METHOD_ENCODER_PARAMETER,
@@ -195,9 +184,6 @@ public class FaissSVSVamanaMethod extends AbstractFaissMethod {
                 );
                 methodAsMapBuilder.addParameter(METHOD_PARAMETER_DEGREE, "", "");
 
-                // Append the encoder for ALL encoders (incl. default flat) so its MethodComponentContext is
-                // normalized into a serializable sub-map; otherwise the raw context fails to serialize into the
-                // field mapping. Flat yields a trailing ",Flat" that SVS's native factory rejects, so drop it.
                 methodAsMapBuilder.addParameter(METHOD_ENCODER_PARAMETER, ",", "");
                 methodAsMapBuilder.dropTrailingDescriptionToken(FAISS_FLAT_DESCRIPTION);
 

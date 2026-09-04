@@ -22,13 +22,8 @@ import static org.opensearch.knn.common.KNNConstants.NAME;
 import static org.opensearch.knn.common.KNNConstants.PARAMETERS;
 
 /**
- * Builds the faiss-style "index description" string (e.g. {@code "SVSVamana64,LVQ4x4"}) + parameter map that
- * the SVS native factory consumes. SVS indices are faiss-format ({@code IndexSVSVamana} is a {@code faiss::Index}),
- * so this assembles the description exactly as faiss's own {@code MethodAsMapBuilder} does.
- *
- * <p>Self-contained copy of core's package-private {@code MethodAsMapBuilder}, so the tenant forces no
- * visibility change on the core faiss package (the same trade made for the native JNI helpers). It adds one
- * SVS-only helper, {@link #dropTrailingDescriptionToken(String)}.
+ * Builds the faiss index-factory description (e.g. {@code "SVSVamana64,LVQ4x4"}) and parameter map. Copy of
+ * core's package-private {@code MethodAsMapBuilder} plus {@link #dropTrailingDescriptionToken(String)}.
  */
 @AllArgsConstructor
 class SvsMethodAsMapBuilder {
@@ -38,25 +33,14 @@ class SvsMethodAsMapBuilder {
     KNNMethodConfigContext knnMethodConfigContext;
     QuantizationConfig quantizationConfig;
 
-    /**
-     * Add a parameter that will be used in the index description for the given method component
-     *
-     * @param parameterName name of the parameter
-     * @param prefix to append to the index description before the parameter
-     * @param suffix to append to the index description after the parameter
-     * @return this builder
-     */
     @SuppressWarnings("unchecked")
     SvsMethodAsMapBuilder addParameter(String parameterName, String prefix, String suffix) {
         indexDescription += prefix;
 
-        // When we add a parameter, what we are doing is taking it from the methods parameter and building it
-        // into the index description string faiss uses to create the index.
         Map<String, Object> methodParameters = (Map<String, Object>) methodAsMap.get(PARAMETERS);
         Parameter<?> parameter = methodComponent.getParameters().get(parameterName);
         Object value = methodParameters.containsKey(parameterName) ? methodParameters.get(parameterName) : parameter.getDefaultValue();
 
-        // Recursion is needed if the parameter is a method component context itself.
         if (parameter instanceof Parameter.MethodComponentContextParameter) {
             MethodComponentContext subMethodComponentContext = (MethodComponentContext) value;
             MethodComponent subMethodComponent = ((Parameter.MethodComponentContextParameter) parameter).getMethodComponent(
@@ -81,7 +65,6 @@ class SvsMethodAsMapBuilder {
 
             methodParameters.put(parameterName, subMethodAsMap);
         } else {
-            // Add the value to the method description
             indexDescription += value;
         }
 
@@ -102,11 +85,6 @@ class SvsMethodAsMapBuilder {
         return this;
     }
 
-    /**
-     * Build
-     *
-     * @return Method as a map
-     */
     KNNLibraryIndexingContext build() {
         methodAsMap.put(KNNConstants.INDEX_DESCRIPTION_PARAMETER, indexDescription);
         return KNNLibraryIndexingContextImpl.builder().parameters(methodAsMap).quantizationConfig(quantizationConfig).build();

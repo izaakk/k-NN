@@ -81,8 +81,7 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
         });
     }
 
-    // A tiny corpus sits far below the LeanVec rough training threshold, so this exercises the native
-    // LVQ-fallback rung of the deferred-training ladder end-to-end (build, write, load, search).
+    // Below the rough training threshold: the LVQ-fallback rung.
     @SneakyThrows
     public void testSVSVamana_withLeanVecEncoder_smallSegmentFallsBackToLvq_thenSucceed() {
         runIndexSearchRoundtrip("test-svs-vamana-leanvec-fallback", SpaceType.L2, builder -> {
@@ -99,9 +98,7 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
         });
     }
 
-    // Deferred LeanVec training end-to-end: flush-time segments stay below the (minimum allowed) 1000
-    // threshold and build as LVQ; the force-merge crosses it, so the merged segment buffers, trains the
-    // projection, drains, and serializes a real LeanVec index that then serves searches.
+    // Flush-time segments stay below the 1000 threshold (LVQ); the force-merge crosses it and trains LeanVec.
     @SneakyThrows
     public void testSVSVamana_withLeanVecDeferredTraining_forceMergeUpgrade_thenSucceed() {
         final String indexName = "test-svs-vamana-leanvec-deferred";
@@ -151,7 +148,6 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
         refreshAllNonSystemIndices();
         assertEquals(numDocs, getDocCount(indexName));
 
-        // The merged segment (1200 >= threshold) takes the deferred-training path.
         forceMergeKnnIndex(indexName, 1);
 
         int k = 10;
@@ -162,8 +158,6 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
         deleteKNNIndex(indexName);
     }
 
-    // Asserts the SVS search context accepts the query-time search_window_size and search_buffer_capacity
-    // method parameters on the top-k path.
     @SneakyThrows
     public void testSVSVamana_withSearchWindowSizeMethodParameter_thenSucceed() {
         final String indexName = "test-svs-vamana-sw-param";
@@ -277,7 +271,7 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
 
     // ------------------------------------------------------------------ radial search
 
-    // With DOCS above and query (1,1,1), faiss L2 (squared) distances are: doc "0" -> 0, "1" -> 3, "2" -> 12.
+    // Query (1,1,1): squared L2 distances are doc "0" -> 0, "1" -> 3, "2" -> 12.
     private static final float[] RADIAL_QUERY = { 1.0f, 1.0f, 1.0f };
 
     @SneakyThrows
@@ -311,8 +305,6 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
         deleteKNNIndex(indexName);
     }
 
-    // Radial combined with the engine's query-time search_window_size and search_buffer_capacity method
-    // parameters (the radial path honors both, same as top-k).
     @SneakyThrows
     public void testSVSVamana_withRadialAndSearchWindowSize_thenSucceed() {
         final String indexName = "test-svs-vamana-radial-sw";
@@ -333,8 +325,7 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
         deleteKNNIndex(indexName);
     }
 
-    // The SVS index only accepts a strictly positive converted radius: cosine min_score 0.3 converts to
-    // 2*0.3-1 = -0.4 and must be rejected with the tenant's descriptive message.
+    // cosine min_score 0.3 converts to a negative radius: rejected at query build (400).
     @SneakyThrows
     public void testSVSVamana_whenRadialThresholdNonPositive_thenRejected() {
         final String indexName = "test-svs-vamana-radial-nonpos";
@@ -350,6 +341,7 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
 
         KNNQueryBuilder query = KNNQueryBuilder.builder().fieldName(fieldName).vector(RADIAL_QUERY).minScore(0.3f).build();
         ResponseException e = expectThrows(ResponseException.class, () -> searchKNNIndex(indexName, query, 10));
+        assertEquals(400, e.getResponse().getStatusLine().getStatusCode());
         assertTrue(EntityUtils.toString(e.getResponse().getEntity()).contains("non-positive radius"));
 
         deleteKNNIndex(indexName);
@@ -357,10 +349,8 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
 
     // ------------------------------------------------------------------ filtered search
 
-    // 30 docs at (i,i,i), even i tagged "a", odd i tagged "b". filtered_exact_search_threshold=0 forces the
-    // filtered queries down the native ANN path. With default settings a corpus this small always falls
-    // back to engine-agnostic exact search, which would leave the JNI filter path unexercised (and, for
-    // radial, hit core ExactSearcher's faiss-only gate).
+    // 30 docs at (i,i,i), even i tagged "a", odd i tagged "b". filtered_exact_search_threshold=0 keeps the
+    // filtered queries on the native ANN path (default settings would fall back to exact search).
     @SneakyThrows
     private void createFilterCorpus(String indexName, String fieldName) {
         Settings settings = Settings.builder()
@@ -425,8 +415,6 @@ public class FaissSVSVamanaIT extends KNNRestTestCase {
 
     // ------------------------------------------------------------------ nested (pinned rejection)
 
-    // Nested fields need per-parent grouping inside the SVS runtime's graph search, which its API does not
-    // expose; pin the tenant's explicit query-time rejection until that lands.
     @SneakyThrows
     public void testSVSVamana_whenNestedField_thenRejected() {
         final String indexName = "test-svs-vamana-nested";
