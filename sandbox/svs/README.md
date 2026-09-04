@@ -114,9 +114,7 @@ segment serves searches at each rung, so recall improves monotonically with merg
 
 ## Platform notes
 
-- **x86-64 Linux only.** Every encoder, `flat` included, is served by the prebuilt Intel SVS runtime,
-  which is published only as a linux-64 artifact. CI compiles the tenant's Java and runs its unit tests
-  (`sandbox-check`) but does not build its native library; the natives are built and tested by hand.
+- **x86-64 Linux only.** The tenant links the prebuilt Intel SVS runtime, pinned to its linux-64 build.
 - **LVQ and LeanVec require Intel AVX-512.** The check runs on the node that validates the mapping (via
   `SvsService#isLvqLeanvecEnabled`), not on every data node: in a heterogeneous cluster a mapping
   accepted by an AVX-512 coordinating node will still fail at index-build time on a data node without
