@@ -50,23 +50,11 @@ GET /my-index/_search
 
 ## Index build
 
-OpenSearch segments are immutable, so the tenant builds each segment's graph in one pass over the complete
-segment rather than inserting vectors one batch at a time. The JNI layer collects the vectors as they are
-streamed and hands them to the SVS runtime together at write time. A graph built this way is denser and
-reaches a given recall with a smaller search window than one grown incrementally.
-
-Build memory: because the graph is built in one pass, a segment build holds the whole segment's vectors in
-native memory as float32 (`vectors x dimension x 4` bytes) in addition to the index under construction,
-whatever the encoder. The footprint advantage of the compressed encoders applies to the resident index
-(steady state), not to the build. Size data-node headroom for the largest merge, not for the flush size:
-
-| Segment | 128 dims | 768 dims | 1536 dims |
-|---|---|---|---|
-| 1M vectors | 0.5 GB | 3 GB | 6 GB |
-| 10M vectors | 5 GB | 30 GB | 60 GB |
-
-A batch-streaming build mode with a build peak equal to the index itself is planned for memory-constrained
-nodes.
+The graph for a segment is built in one pass at write time: the JNI layer collects the segment's vectors as
+OpenSearch streams them and hands the complete set to the SVS runtime. During a build the segment's vectors
+are held in native memory as float32 (`vectors x dimension x 4` bytes) alongside the index under
+construction, regardless of encoder. Size data-node headroom for the largest merge, not the flush size: a
+10M x 768 merge needs about 30 GB for the vectors alone.
 
 ### Encoders and `compression_level`
 
