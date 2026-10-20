@@ -1,0 +1,8 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// Build logic comes from sandbox/build.gradle. The native build is discovered from
+// jni/sandbox/bruteforce/tenant.cmake.
+description = "Example brute-force engine for the k-NN sandbox: an exact scan in a small isolated JNI library"
