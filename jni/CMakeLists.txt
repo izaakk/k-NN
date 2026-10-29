@@ -219,6 +219,7 @@ if ("${WIN32}" STREQUAL "")
                 tests/nmslib_stream_support_test.cpp
                 tests/faiss_index_bq_unit_test.cpp
                 tests/faiss_sq_distance_computer_test.cpp
+                tests/simd_sq_similarity_function_test.cpp
                 tests/build_config_test.cpp
         )
 
@@ -233,6 +234,7 @@ if ("${WIN32}" STREQUAL "")
                 ${TARGET_LIB_NMSLIB}
                 ${TARGET_LIB_COMMON}
                 ${TARGET_LIB_UTIL}
+                ${TARGET_LIB_SIMD}
         )
 
         target_compile_definitions(jni_test PRIVATE ${KNN_BUILD_CONFIG_DEFINITIONS})

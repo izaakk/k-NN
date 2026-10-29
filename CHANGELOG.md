@@ -31,4 +31,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 * Avoid FP16 -> FP32 -> FP16 round trip when merging `half_float` segments [#3610](https://github.com/opensearch-project/k-NN/pull/3610)
 * Report `exact_search` timings in the Profile API for nested k-NN queries with `expand_nested_docs` on the Lucene engine [#3579](https://github.com/opensearch-project/k-NN/pull/3579)
 * Remove synchronized keyword from KNNSettings class during Instance creation and made instance creation final [#3630](https://github.com/opensearch-project/k-NN/pull/3630)
+* Speed up the 1-bit SQ (`32x` float / `16x` half_float) native bulk scorer: masked tail instead of a scalar popcount loop, single-vector and remainder paths share the SIMD routine, and AVX512-BITALG `vpopcntb` on `avx512_spr` builds [#TBD](https://github.com/opensearch-project/k-NN/pull/TBD)
 * Send `half_float` vectors to the remote vector index build service as fp16 instead of fp32 [#3608](https://github.com/opensearch-project/k-NN/pull/3608)
