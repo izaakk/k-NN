@@ -12,14 +12,17 @@
 // Bit-exact tests for the SQ (4-bit query x 1-bit data) SIMD similarity functions
 // (SQ_IP / SQ_L2 / SQ_COSINE) exposed through SimilarityFunction::saveSearchContext.
 //
-// The reference is a plain scalar byte loop. Every code-byte length (so every masked-tail
-// length), every bulk batch shape (8 / 4 / remainder) and the single-vector path are compared
-// against it, for the build's SIMD level (avx2 / avx512 / avx512_spr / neon / generic).
+// The reference is a plain scalar byte loop. Every code-byte length from 1 to 130 bytes (so every
+// masked-tail length 1..63, the exact 64-byte multiples, and a full chunk plus a tail), every bulk batch
+// shape (8 / 4 / remainder) and the single-vector path are compared against it, for the build's SIMD
+// level (avx2 / avx512 / avx512_spr / neon / generic). The level is fixed at build time, so the tests
+// skip when the host CPU cannot execute the instructions the library was compiled with.
 
 #include <sys/mman.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -38,6 +41,34 @@ namespace {
 
 constexpr int32_t CORRECTION_BYTES = 3 * sizeof(float) + sizeof(int32_t);
 constexpr float FOUR_BIT_SCALE = 1.0f / 15.0f;
+
+// The "neutral" datasets below rely on the query interval (0, 15) giving ly == 1 exactly, so that
+// score(IP) == 1 + dotProduct can be compared with ASSERT_EQ. That holds because 15 * fl(1/15) rounds
+// to exactly 1.0f; pin it so a change to how the kernel forms ly cannot silently weaken the test.
+static_assert(15.0f * FOUR_BIT_SCALE == 1.0f, "ly = (15 - 0) * FOUR_BIT_SCALE must be exactly 1.0f");
+
+// The SIMD level is chosen at build time from the compiler; the library has no runtime dispatch.
+// Skip (instead of SIGILL) when this host cannot execute what the library was compiled for.
+bool hostSupportsBuildIsa() {
+#if defined(__x86_64__) || defined(__i386__)
+    #if defined(KNN_HAVE_AVX512_SPR)
+    return __builtin_cpu_supports("avx512bw") && __builtin_cpu_supports("avx512bitalg");
+    #elif defined(KNN_HAVE_AVX512)
+    return __builtin_cpu_supports("avx512bw");
+    #elif defined(KNN_HAVE_AVX2_F16C)
+    return __builtin_cpu_supports("avx2");
+    #else
+    return true;
+    #endif
+#else
+    return true;
+#endif
+}
+
+#define SKIP_IF_HOST_LACKS_BUILD_ISA()                                                                 \
+    if (!hostSupportsBuildIsa()) {                                                                     \
+        GTEST_SKIP() << "host CPU lacks the SIMD level this library was built for";                    \
+    }
 
 struct QueryCorrections {
     float lower = 0;
@@ -59,6 +90,13 @@ struct SqDataset {
 
 int32_t codeBytesFor(const int32_t dim) {
     return (dim + 7) / 8;
+}
+
+// Lucene packs bit i of a vector into bit (7 - i % 8) of byte i / 8 (MSB first), so when dim is not a
+// multiple of 8 the padding bits of the last byte are its LOW bits, and they are zero.
+uint8_t lastByteMaskFor(const int32_t dim) {
+    const int32_t validBits = dim - 8 * (codeBytesFor(dim) - 1);  // 1..8
+    return static_cast<uint8_t>(0xFFu << (8 - validBits));
 }
 
 void writeCorrections(uint8_t* dst, const float lower, const float upper, const float additional, const int32_t componentSum) {
@@ -86,8 +124,19 @@ int64_t referenceDotProduct(const uint8_t* query, const uint8_t* code, const int
     return result;
 }
 
+struct ReferenceScore {
+    float score;       // the Lucene-side score, as calculateSimilarity returns it
+    float errorBound;  // sum of the magnitudes of every term that enters the score (see tolerance below)
+};
+
 // Scalar reference of the complete score, mirroring AVX512SQSimilarityFunction / default SQ function.
-float referenceScore(const SqDataset& ds, const int32_t id, const NativeSimilarityFunctionType type) {
+//
+// The kernel TU is compiled with the SIMD flags and -O3, where GCC contracts a*b + c into FMAs; this test
+// TU is not, so the two can legitimately differ by a few ulps of the largest intermediate. The tolerance
+// used by the callers is therefore derived from the arithmetic: 16 * FLT_EPSILON * (sum of |terms|),
+// where every score transform (1 + s, 1 / (1 - s), (1 + s) / 2, 1 / (1 + s)) has |derivative| <= 1 and the
+// L2 pre-transform multiplies the dot-product terms by 2.
+ReferenceScore referenceScore(const SqDataset& ds, const int32_t id, const NativeSimilarityFunctionType type) {
     const uint8_t* vec = ds.vectors.data() + static_cast<size_t>(id) * ds.oneVectorBytes;
     const float qc = static_cast<float>(referenceDotProduct(ds.query.data(), vec, ds.codeBytes));
     float lower, upper, additional;
@@ -99,24 +148,40 @@ float referenceScore(const SqDataset& ds, const int32_t id, const NativeSimilari
     const float ay = ds.q.lower;
     const float ly = (ds.q.upper - ds.q.lower) * FOUR_BIT_SCALE;
     const float y1 = static_cast<float>(ds.q.componentSum);
-    float score = ax * ay * ds.dim + ay * lx * x1 + ax * ly * y1 + lx * ly * qc;
+    const float t0 = ax * ay * ds.dim, t1 = ay * lx * x1, t2 = ax * ly * y1, t3 = lx * ly * qc;
+    float score = t0 + t1 + t2 + t3;
+    const float dotTerms = std::abs(t0) + std::abs(t1) + std::abs(t2) + std::abs(t3);
     if (type == NativeSimilarityFunctionType::SQ_IP) {
         score += ds.q.additional + additional - ds.q.centroidDp;
-        return score < 0 ? 1 / (1 - score) : (1 + score);
+        const float bound = dotTerms + std::abs(ds.q.additional) + std::abs(additional) + std::abs(ds.q.centroidDp);
+        return {score < 0 ? 1 / (1 - score) : (1 + score), bound};
     }
     if (type == NativeSimilarityFunctionType::SQ_COSINE) {
         score += ds.q.additional + additional - ds.q.centroidDp;
+        const float bound = dotTerms + std::abs(ds.q.additional) + std::abs(additional) + std::abs(ds.q.centroidDp);
         const float raw = (1.0f + score) * 0.5f;
-        return raw < 0.0f ? 0.0f : (raw > 1.0f ? 1.0f : raw);
+        return {raw < 0.0f ? 0.0f : (raw > 1.0f ? 1.0f : raw), bound};
     }
+    const float bound = 2 * dotTerms + std::abs(ds.q.additional) + std::abs(additional);
     score = std::max(0.0F, ds.q.additional + additional - 2 * score);
-    return 1.0f / (1.0f + score);
+    return {1.0f / (1.0f + score), bound};
 }
+
+float toleranceFor(const ReferenceScore& ref) {
+    return 16 * FLT_EPSILON * ref.errorBound + 1e-7f;
+}
+
+enum class Fill { RANDOM, ALL_ONES };
 
 // neutral == true: corrections chosen so that score(IP) == 1 + dotProduct exactly
 // (ay = 0, ly = 1, ax = 0, lx = 1, no additive terms), which makes the SIMD result comparable
-// bit-for-bit with the integer reference. neutral == false: realistic random corrections.
-SqDataset makeDataset(const int32_t dim, const int32_t numVectors, const bool neutral, const uint32_t seed) {
+// bit-for-bit with the integer reference.
+// neutral == false: random corrections on the scale a real OSQ segment produces, i.e. intervals of
+// width ~1/dim so that the pre-transform score lands in [-1, 1] (a cosine, or a unit-norm inner product).
+// With intervals of width ~1 the score would be O(dim) and SQ_COSINE would clamp to 0 or 1 nearly always,
+// testing only the clamp. The doc component sum is <= dim (1-bit codes), the query's <= 15 * dim.
+SqDataset makeDataset(const int32_t dim, const int32_t numVectors, const bool neutral, const uint32_t seed,
+                      const Fill fill = Fill::RANDOM) {
     SqDataset ds;
     ds.dim = dim;
     ds.codeBytes = codeBytesFor(dim);
@@ -125,15 +190,16 @@ SqDataset makeDataset(const int32_t dim, const int32_t numVectors, const bool ne
     std::mt19937 rng(seed);
     std::uniform_int_distribution<int32_t> byteDist(0, 255);
     std::uniform_real_distribution<float> unit(-1.0f, 1.0f);
-    std::uniform_int_distribution<int32_t> sumDist(0, 15 * dim);
+    std::uniform_int_distribution<int32_t> docSumDist(0, dim);
+    std::uniform_int_distribution<int32_t> querySumDist(0, 15 * dim);
+    const float scale = 1.0f / static_cast<float>(std::max(dim, 16));
+    const uint8_t lastByteMask = lastByteMaskFor(dim);
+    auto fillByte = [&]() { return fill == Fill::ALL_ONES ? uint8_t {0xFF} : static_cast<uint8_t>(byteDist(rng)); };
 
     ds.query.resize(4 * ds.codeBytes);
     for (auto& b : ds.query) {
-        b = static_cast<uint8_t>(byteDist(rng));
+        b = fillByte();
     }
-    // Bits above `dim` in the last byte of each plane must be zero, as the Java quantizer writes them.
-    const int32_t validBitsInLastByte = dim - 8 * (ds.codeBytes - 1);
-    const uint8_t lastByteMask = static_cast<uint8_t>((1u << validBitsInLastByte) - 1u);
     for (int32_t plane = 0; plane < 4; ++plane) {
         ds.query[plane * ds.codeBytes + ds.codeBytes - 1] &= lastByteMask;
     }
@@ -142,23 +208,23 @@ SqDataset makeDataset(const int32_t dim, const int32_t numVectors, const bool ne
     for (int32_t v = 0; v < numVectors; ++v) {
         uint8_t* vec = ds.vectors.data() + static_cast<size_t>(v) * ds.oneVectorBytes;
         for (int32_t i = 0; i < ds.codeBytes; ++i) {
-            vec[i] = static_cast<uint8_t>(byteDist(rng));
+            vec[i] = fillByte();
         }
         vec[ds.codeBytes - 1] &= lastByteMask;
         if (neutral) {
-            writeCorrections(vec + ds.codeBytes, 0.0f, 1.0f, 0.0f, sumDist(rng));
+            writeCorrections(vec + ds.codeBytes, 0.0f, 1.0f, 0.0f, docSumDist(rng));
         } else {
-            const float lower = -std::abs(unit(rng));
-            const float upper = lower + 0.5f + std::abs(unit(rng));
-            writeCorrections(vec + ds.codeBytes, lower, upper, unit(rng), sumDist(rng));
+            const float lower = -std::abs(unit(rng)) * scale;
+            const float upper = lower + (0.5f + std::abs(unit(rng))) * scale;
+            writeCorrections(vec + ds.codeBytes, lower, upper, 0.25f * unit(rng), docSumDist(rng));
         }
     }
 
     if (neutral) {
-        ds.q = QueryCorrections {0.0f, 15.0f, 0.0f, sumDist(rng), 0.0f};
+        ds.q = QueryCorrections {0.0f, 15.0f, 0.0f, querySumDist(rng), 0.0f};
     } else {
-        const float lower = -std::abs(unit(rng));
-        ds.q = QueryCorrections {lower, lower + 0.5f + std::abs(unit(rng)), unit(rng), sumDist(rng), unit(rng)};
+        const float lower = -std::abs(unit(rng)) * scale;
+        ds.q = QueryCorrections {lower, lower + (0.5f + std::abs(unit(rng))) * scale, 0.25f * unit(rng), querySumDist(rng), 0.25f * unit(rng)};
     }
     return ds;
 }
@@ -201,16 +267,48 @@ std::vector<int32_t> identityIds(const int32_t n) {
     return ids;
 }
 
-const std::vector<int32_t> TEST_DIMS {
-    1, 7, 8, 9, 16, 63, 64, 65, 100, 127, 128, 129, 200, 256, 384, 500, 511, 512, 513, 768, 1000, 1024, 1536, 2048, 3072};
+// Every code-byte length 1..130 (dims 8, 16, ..., 1040) plus dims whose last byte is partially used and a
+// few large ones: all 64 residues of codeBytes % 64, exact multiples of 64, and more than one full chunk.
+std::vector<int32_t> allTestDims() {
+    std::vector<int32_t> dims {1, 7, 9, 63, 65, 100, 127, 129, 500, 511, 513, 1000, 1536, 2048, 3072};
+    for (int32_t dim = 8; dim <= 130 * 8; dim += 8) {
+        dims.push_back(dim);
+    }
+    std::sort(dims.begin(), dims.end());
+    return dims;
+}
+
+const std::vector<int32_t> TEST_DIMS = allTestDims();
+// 8 / 4 / 1 paths in every combination, including numVectors < 4 and > 8 with every remainder.
 const std::vector<int32_t> TEST_NUM_VECTORS {1, 2, 3, 4, 5, 7, 8, 9, 12, 13, 16, 17, 33, 100};
 const std::vector<NativeSimilarityFunctionType> SQ_TYPES {
     NativeSimilarityFunctionType::SQ_IP, NativeSimilarityFunctionType::SQ_L2, NativeSimilarityFunctionType::SQ_COSINE};
+
+// Anonymous mapping of 2 pages, the second one PROT_NONE; unmapped on destruction even when an ASSERT fails.
+struct GuardedPage {
+    long pageSize = sysconf(_SC_PAGESIZE);
+    uint8_t* base = nullptr;
+    GuardedPage() {
+        void* mapping = mmap(nullptr, 2 * pageSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (mapping != MAP_FAILED && mprotect(static_cast<uint8_t*>(mapping) + pageSize, pageSize, PROT_NONE) == 0) {
+            base = static_cast<uint8_t*>(mapping);
+        } else if (mapping != MAP_FAILED) {
+            munmap(mapping, 2 * pageSize);
+        }
+    }
+    ~GuardedPage() {
+        if (base != nullptr) {
+            munmap(base, 2 * pageSize);
+        }
+    }
+    uint8_t* guardStart() const { return base + pageSize; }
+};
 
 }  // namespace
 
 // The integer dot product must be exact for every tail length (codeBytes % 64) and every batch shape.
 TEST(SimdSqSimilarityFunctionTest, BulkDotProductIsExactForEveryTailLengthAndBatchShape) {
+    SKIP_IF_HOST_LACKS_BUILD_ISA();
     uint32_t seed = 1;
     for (const int32_t dim : TEST_DIMS) {
         for (const int32_t numVectors : TEST_NUM_VECTORS) {
@@ -228,10 +326,31 @@ TEST(SimdSqSimilarityFunctionTest, BulkDotProductIsExactForEveryTailLengthAndBat
     }
 }
 
+// All query-plane and code bits set: every byte reaches the maximum weighted popcount
+// 8*1 + 8*2 + 8*4 + 8*8 = 120, which pins the "fits in a uint8_t, no cross-byte carry in the 16-bit
+// shifts" argument of the kernel, and every 8-byte group reaches 960 in the u64 accumulators.
+TEST(SimdSqSimilarityFunctionTest, AllOnesCodesReachTheMaximumWeightedPopcount) {
+    SKIP_IF_HOST_LACKS_BUILD_ISA();
+    for (const int32_t dim : {8, 64, 100, 512, 1000, 3072}) {
+        for (const int32_t numVectors : {4, 9}) {
+            SqDataset ds = makeDataset(dim, numVectors, /*neutral=*/true, 5u, Fill::ALL_ONES);
+            SimdVectorSearchContext* ctx = setupSingleRegionContext(ds, NativeSimilarityFunctionType::SQ_IP);
+            const std::vector<float> scores = bulkScores(ctx, identityIds(numVectors));
+            const float expected = 1.0f + 15.0f * static_cast<float>(dim);  // 15 * popcount(valid bits)
+            for (int32_t id = 0; id < numVectors; ++id) {
+                ASSERT_EQ(expected, scores[id]) << "dim=" << dim << " numVectors=" << numVectors << " id=" << id;
+                ASSERT_EQ(expected, ctx->similarityFunction->calculateSimilarity(ctx, id)) << "single dim=" << dim << " id=" << id;
+            }
+        }
+    }
+}
+
 // Bulk and single-vector scoring must agree with each other and with the scalar reference for all
 // three metric modes with realistic correction factors, including a shuffled id order.
 TEST(SimdSqSimilarityFunctionTest, BulkAndSingleMatchReferenceForAllMetricModes) {
+    SKIP_IF_HOST_LACKS_BUILD_ISA();
     uint32_t seed = 1000;
+    int32_t cosineTotal = 0, cosineInsideUnitInterval = 0;
     for (const NativeSimilarityFunctionType type : SQ_TYPES) {
         for (const int32_t dim : {1, 64, 128, 129, 384, 768, 1024, 3072}) {
             for (const int32_t numVectors : {1, 4, 9, 17, 100}) {
@@ -241,32 +360,43 @@ TEST(SimdSqSimilarityFunctionTest, BulkAndSingleMatchReferenceForAllMetricModes)
                 std::shuffle(ids.begin(), ids.end(), std::mt19937(seed));
                 const std::vector<float> scores = bulkScores(ctx, ids);
                 for (int32_t i = 0; i < numVectors; ++i) {
-                    const float expected = referenceScore(ds, ids[i], type);
-                    const float tolerance = 1e-5f * std::abs(expected) + 1e-6f;
-                    ASSERT_NEAR(expected, scores[i], tolerance)
+                    const ReferenceScore ref = referenceScore(ds, ids[i], type);
+                    ASSERT_NEAR(ref.score, scores[i], toleranceFor(ref))
                         << "bulk type=" << static_cast<int32_t>(type) << " dim=" << dim << " id=" << ids[i];
                     ASSERT_FLOAT_EQ(scores[i], ctx->similarityFunction->calculateSimilarity(ctx, ids[i]))
                         << "single type=" << static_cast<int32_t>(type) << " dim=" << dim << " id=" << ids[i];
+                    if (type == NativeSimilarityFunctionType::SQ_COSINE) {
+                        ++cosineTotal;
+                        cosineInsideUnitInterval += (ref.score > 0.0f && ref.score < 1.0f) ? 1 : 0;
+                    }
                 }
             }
         }
     }
+    // The cosine comparisons must mostly exercise the arithmetic, not the 0 / 1 clamp of cosineTransform.
+    ASSERT_GE(cosineInsideUnitInterval, (cosineTotal * 9) / 10) << cosineInsideUnitInterval << " of " << cosineTotal;
 }
 
 // A vector that straddles two mmap regions is copied into tmpBuffer by getVectorPointer; the scores
-// must be identical to the single-region case.
-TEST(SimdSqSimilarityFunctionTest, VectorsStraddlingTwoMemoryRegionsScoreIdentically) {
+// must be identical to the single-region case. Three regions: vector 5 is split inside its code, vector 6
+// inside its 16 correction bytes, so one 8-vector batch holds two straddling vectors.
+TEST(SimdSqSimilarityFunctionTest, VectorsStraddlingMemoryRegionsScoreIdentically) {
+    SKIP_IF_HOST_LACKS_BUILD_ISA();
     for (const int32_t dim : {128, 768, 1000}) {
         const int32_t numVectors = 37;
         SqDataset ds = makeDataset(dim, numVectors, /*neutral=*/false, 7u + dim);
         SimdVectorSearchContext* ctx = setupSingleRegionContext(ds, NativeSimilarityFunctionType::SQ_IP);
         const std::vector<float> expected = bulkScores(ctx, identityIds(numVectors));
 
-        // Split in the middle of vector 5 so that it, and only it, straddles the boundary.
-        const int64_t split = 5 * ds.oneVectorBytes + ds.codeBytes / 2 + 1;
+        const int64_t split1 = 5 * ds.oneVectorBytes + ds.codeBytes / 2 + 1;
+        const int64_t split2 = 6 * ds.oneVectorBytes + ds.codeBytes + 6;
+        const auto addr = [&](const int64_t offset) {
+            return static_cast<int64_t>(reinterpret_cast<uintptr_t>(ds.vectors.data() + offset));
+        };
         std::vector<int64_t> addressAndSize {
-            static_cast<int64_t>(reinterpret_cast<uintptr_t>(ds.vectors.data())), split,
-            static_cast<int64_t>(reinterpret_cast<uintptr_t>(ds.vectors.data() + split)), static_cast<int64_t>(ds.vectors.size()) - split};
+            addr(0), split1,
+            addr(split1), split2 - split1,
+            addr(split2), static_cast<int64_t>(ds.vectors.size()) - split2};
         ctx = setupContext(ds, NativeSimilarityFunctionType::SQ_IP, addressAndSize);
         const std::vector<float> actual = bulkScores(ctx, identityIds(numVectors));
         for (int32_t id = 0; id < numVectors; ++id) {
@@ -276,20 +406,21 @@ TEST(SimdSqSimilarityFunctionTest, VectorsStraddlingTwoMemoryRegionsScoreIdentic
     }
 }
 
-// The masked tail must never touch memory past the last vector: place the vectors so that the
-// region ends exactly at a PROT_NONE guard page. An over-read would SIGSEGV here.
+// The masked tail must never touch memory past the last vector: place the vectors so that the last
+// correction byte of the last vector is the last byte before a PROT_NONE guard page. An over-read of
+// even one byte would SIGSEGV here. (main's full-chunk + scalar-byte tail passes this too; the test
+// guards the masked-load fault-suppression the new tail relies on.)
 TEST(SimdSqSimilarityFunctionTest, MaskedTailDoesNotReadPastTheMappedRegion) {
-    const long pageSize = sysconf(_SC_PAGESIZE);
+    SKIP_IF_HOST_LACKS_BUILD_ISA();
     for (const int32_t dim : {8, 128, 384, 768, 1000}) {
-        SqDataset ds = makeDataset(dim, /*numVectors=*/1, /*neutral=*/false, 99u + dim);
-        const int32_t numVectors = static_cast<int32_t>(pageSize / ds.oneVectorBytes);
-        ds = makeDataset(dim, numVectors, /*neutral=*/false, 99u + dim);
-        ASSERT_LE(static_cast<long>(ds.vectors.size()), pageSize);
+        GuardedPage page;
+        ASSERT_NE(page.base, nullptr);
+        const int32_t oneVectorBytes = codeBytesFor(dim) + CORRECTION_BYTES;
+        const int32_t numVectors = static_cast<int32_t>(page.pageSize / oneVectorBytes);
+        SqDataset ds = makeDataset(dim, numVectors, /*neutral=*/false, 99u + dim);
+        ASSERT_LE(static_cast<long>(ds.vectors.size()), page.pageSize);
 
-        void* mapping = mmap(nullptr, 2 * pageSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        ASSERT_NE(mapping, MAP_FAILED);
-        ASSERT_EQ(0, mprotect(static_cast<uint8_t*>(mapping) + pageSize, pageSize, PROT_NONE));
-        uint8_t* region = static_cast<uint8_t*>(mapping) + pageSize - ds.vectors.size();
+        uint8_t* region = page.guardStart() - ds.vectors.size();
         std::memcpy(region, ds.vectors.data(), ds.vectors.size());
 
         std::vector<int64_t> addressAndSize {
@@ -297,10 +428,9 @@ TEST(SimdSqSimilarityFunctionTest, MaskedTailDoesNotReadPastTheMappedRegion) {
         SimdVectorSearchContext* ctx = setupContext(ds, NativeSimilarityFunctionType::SQ_L2, addressAndSize);
         const std::vector<float> scores = bulkScores(ctx, identityIds(numVectors));
         for (int32_t id = 0; id < numVectors; ++id) {
-            const float expected = referenceScore(ds, id, NativeSimilarityFunctionType::SQ_L2);
-            ASSERT_NEAR(expected, scores[id], 1e-5f * std::abs(expected) + 1e-6f) << "dim=" << dim << " id=" << id;
+            const ReferenceScore ref = referenceScore(ds, id, NativeSimilarityFunctionType::SQ_L2);
+            ASSERT_NEAR(ref.score, scores[id], toleranceFor(ref)) << "dim=" << dim << " id=" << id;
         }
         ASSERT_FLOAT_EQ(scores[numVectors - 1], ctx->similarityFunction->calculateSimilarity(ctx, numVectors - 1));
-        munmap(mapping, 2 * pageSize);
     }
 }
