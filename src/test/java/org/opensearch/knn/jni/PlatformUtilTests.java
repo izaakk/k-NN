@@ -38,7 +38,6 @@ public class PlatformUtilTests extends Assert {
         PlatformUtils.reset();
     }
 
-    // The answers are cached in statics; a mocked value must not leak into later test classes in the same JVM.
     @After
     public void tearDown() {
         PlatformUtils.reset();
