@@ -14,11 +14,12 @@
 // timed in one binary; keep them in sync with avx512_common_simd_similarity_function.cpp.
 //
 // Kernels:
-//   BM_Old      : avx512_4bitDotProductBatch as on main @8859ed5 (nibble-LUT popcount, scalar byte tail for
-//                 codeBytes % 64, scalar int4BitDotProduct for the vector remainder). The LUT is a constexpr
-//                 constant here, as in the new kernel; main's function-local `static const` LUT additionally
-//                 paid an init-guard check per call (see avx512_popcnt_epi8), so main is slightly slower than BM_Old.
-//   BM_New      : masked-load tail, same nibble-LUT popcount (what the avx512 build gets).
+//   BM_Main     : avx512_4bitDotProductBatch exactly as on main @8859ed5 (nibble-LUT popcount with the LUT as a
+//                 function-local `static const` built by _mm512_setr_epi64, i.e. a dynamic initialiser whose guard
+//                 is checked at every call; scalar byte tail for codeBytes % 64; scalar int4BitDotProduct for the
+//                 vector remainder and the single-vector path).
+//   BM_MainConstexprLut: main's kernel with only the LUT turned into a constexpr constant (isolates that fix).
+//   BM_New      : masked-load tail, constexpr nibble-LUT popcount (what the avx512 build gets).
 //   BM_NewBitalg: masked-load tail + vpopcntb (what the avx512_spr build gets); only when compiled with
 //                 -mavx512bitalg.
 //
@@ -82,6 +83,17 @@ FORCE_INLINE __m512i lut_popcnt_epi8(const __m512i v) {
     return _mm512_add_epi8(_mm512_shuffle_epi8(popLut, lo), _mm512_shuffle_epi8(popLut, hi));
 }
 
+// main's version of the LUT: a function-local static with a dynamic initialiser (guard check per call).
+FORCE_INLINE __m512i lut_popcnt_epi8_guarded(const __m512i v) {
+    alignas(64) static const __m512i popLut = _mm512_setr_epi64(
+        0x0302020102010100LL, 0x0403030203020201LL, 0x0302020102010100LL, 0x0403030203020201LL,
+        0x0302020102010100LL, 0x0403030203020201LL, 0x0302020102010100LL, 0x0403030203020201LL);
+    const __m512i lowMask = _mm512_set1_epi8(0x0F);
+    const __m512i lo = _mm512_and_si512(v, lowMask);
+    const __m512i hi = _mm512_and_si512(_mm512_srli_epi16(v, 4), lowMask);
+    return _mm512_add_epi8(_mm512_shuffle_epi8(popLut, lo), _mm512_shuffle_epi8(popLut, hi));
+}
+
 #if defined(__AVX512BITALG__)
 FORCE_INLINE __m512i bitalg_popcnt_epi8(const __m512i v) {
     return _mm512_popcnt_epi8(v);
@@ -110,7 +122,7 @@ FORCE_INLINE int64_t old_int4BitDotProduct(const uint8_t* q, const uint8_t* d, c
     return result;
 }
 
-template <int BATCH_SIZE>
+template <int BATCH_SIZE, __m512i (*POPCNT)(__m512i)>
 FORCE_INLINE void old_4bitDotProductBatch(const uint8_t* queryPtr, uint8_t** dataVecs, const int32_t binaryCodeBytes, float* results) {
     const uint8_t* plane0 = queryPtr;
     const uint8_t* plane1 = queryPtr + binaryCodeBytes;
@@ -128,8 +140,8 @@ FORCE_INLINE void old_4bitDotProductBatch(const uint8_t* queryPtr, uint8_t** dat
         }
         for (int32_t b = 0; b < BATCH_SIZE; ++b) {
             const __m512i d = _mm512_loadu_si512(dataVecs[b] + i);
-            const __m512i p0 = lut_popcnt_epi8(_mm512_and_si512(q0, d)), p1 = lut_popcnt_epi8(_mm512_and_si512(q1, d));
-            const __m512i p2 = lut_popcnt_epi8(_mm512_and_si512(q2, d)), p3 = lut_popcnt_epi8(_mm512_and_si512(q3, d));
+            const __m512i p0 = POPCNT(_mm512_and_si512(q0, d)), p1 = POPCNT(_mm512_and_si512(q1, d));
+            const __m512i p2 = POPCNT(_mm512_and_si512(q2, d)), p3 = POPCNT(_mm512_and_si512(q3, d));
             __m512i weighted = _mm512_add_epi8(p0, _mm512_slli_epi16(p1, 1));
             weighted = _mm512_add_epi8(weighted, _mm512_slli_epi16(p2, 2));
             weighted = _mm512_add_epi8(weighted, _mm512_slli_epi16(p3, 3));
@@ -148,10 +160,11 @@ FORCE_INLINE void old_4bitDotProductBatch(const uint8_t* queryPtr, uint8_t** dat
     }
 }
 
+template <__m512i (*POPCNT)(__m512i)>
 struct OldKernel {
     template <int BATCH_SIZE>
     static FORCE_INLINE void batch(const uint8_t* q, uint8_t** vecs, const int32_t codeBytes, float* out) {
-        old_4bitDotProductBatch<BATCH_SIZE>(q, vecs, codeBytes, out);
+        old_4bitDotProductBatch<BATCH_SIZE, POPCNT>(q, vecs, codeBytes, out);
     }
     static FORCE_INLINE float single(const uint8_t* q, const uint8_t* vec, const int32_t codeBytes) {
         return static_cast<float>(old_int4BitDotProduct(q, vec, codeBytes));
@@ -322,7 +335,8 @@ void runBenchmark(benchmark::State& state) {
     state.counters["vecs"] = vecs;
 }
 
-void BM_Old(benchmark::State& state) { runBenchmark<OldKernel>(state); }
+void BM_Main(benchmark::State& state) { runBenchmark<OldKernel<lut_popcnt_epi8_guarded>>(state); }
+void BM_MainConstexprLut(benchmark::State& state) { runBenchmark<OldKernel<lut_popcnt_epi8>>(state); }
 void BM_New(benchmark::State& state) { runBenchmark<NewKernel<lut_popcnt_epi8>>(state); }
 #if defined(__AVX512BITALG__)
 void BM_NewBitalg(benchmark::State& state) { runBenchmark<NewKernel<bitalg_popcnt_epi8>>(state); }
@@ -339,7 +353,8 @@ void Args(benchmark::internal::Benchmark* b) {
 
 }  // namespace
 
-BENCHMARK(BM_Old)->Apply(Args);
+BENCHMARK(BM_Main)->Apply(Args);
+BENCHMARK(BM_MainConstexprLut)->Apply(Args);
 BENCHMARK(BM_New)->Apply(Args);
 #if defined(__AVX512BITALG__)
 BENCHMARK(BM_NewBitalg)->Apply(Args);
