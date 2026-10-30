@@ -14,6 +14,7 @@ package org.opensearch.knn.jni;
 import com.sun.jna.Platform;
 
 import org.junit.Assert;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.MockedStatic;
@@ -34,6 +35,15 @@ public class PlatformUtilTests extends Assert {
 
     @Before
     public void setUp() {
+        PlatformUtils.reset();
+    }
+
+    // The CPU-feature answers are cached in static fields. The mocked /proc/cpuinfo contents of these tests
+    // must not leak into test classes that run later in the same JVM and load the native libraries
+    // (e.g. SimdVectorComputeServiceScoreFromBytesTests): a cached "false" for avx512_spr skips the only
+    // SIMD library an avx512_spr build produces and fails them with UnsatisfiedLinkError.
+    @After
+    public void tearDown() {
         PlatformUtils.reset();
     }
 
