@@ -38,10 +38,7 @@ public class PlatformUtilTests extends Assert {
         PlatformUtils.reset();
     }
 
-    // The CPU-feature answers are cached in static fields. The mocked /proc/cpuinfo contents of these tests
-    // must not leak into test classes that run later in the same JVM and load the native libraries
-    // (e.g. SimdVectorComputeServiceScoreFromBytesTests): a cached "false" for avx512_spr skips the only
-    // SIMD library an avx512_spr build produces and fails them with UnsatisfiedLinkError.
+    // The answers are cached in statics; a mocked value must not leak into later test classes in the same JVM.
     @After
     public void tearDown() {
         PlatformUtils.reset();

@@ -195,10 +195,7 @@ SimdVectorSearchContext* SimilarityFunction::saveSearchContext(
     // Allocate query vector space
     if (THREAD_LOCAL_SIMD_VEC_SRCH_CTX.queryVectorByteSize < queryByteSize) {
         // We need to allocate or re-allocate the space.
-        // Allocating 64 bytes aligned memory, plus one extra 64-byte line: the SQ kernel's masked tail
-        // load covers a full 64-byte window of which only the first (queryByteSize % 64) bytes are live;
-        // masked-off lanes never fault, but keeping the whole window inside the allocation avoids the
-        // microcode assist a masked load takes when its window crosses into an unmapped page.
+        // Allocating 64 bytes aligned memory, plus one 64-byte line so a masked tail load's window stays inside it.
         // Since 16000 dimension is the maximum, therefore at most 62.6KB will be allocated per thread.
         const auto roundedUpQueryByteSize = ((queryByteSize + 63) / 64) * 64 + 64;
         void* alignedPtr = allocate_aligned_memory(64, roundedUpQueryByteSize);

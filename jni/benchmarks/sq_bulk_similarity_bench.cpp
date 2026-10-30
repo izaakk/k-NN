@@ -9,33 +9,17 @@
  * GitHub history for details.
  */
 
-// Micro-benchmark for the SQ (4-bit query x 1-bit data) bulk similarity kernel, standalone
-// (no JNI / Faiss dependency). The two kernels are transcribed here so that "before" and "after" can be
-// timed in one binary; keep them in sync with avx512_common_simd_similarity_function.cpp.
-//
-// Kernels:
-//   BM_Main     : avx512_4bitDotProductBatch exactly as on main @8859ed5 (nibble-LUT popcount with the LUT as a
-//                 function-local `static const` built by _mm512_setr_epi64, i.e. a dynamic initialiser whose guard
-//                 is checked at every call; scalar byte tail for codeBytes % 64; scalar int4BitDotProduct for the
-//                 vector remainder and the single-vector path).
-//   BM_MainConstexprLut: main's kernel with only the LUT turned into a constexpr constant (isolates that fix).
-//   BM_New      : masked-load tail, constexpr nibble-LUT popcount (what the avx512 build gets).
-//   BM_NewBitalg: masked-load tail + vpopcntb (what the avx512_spr build gets); only when compiled with
-//                 -mavx512bitalg.
-//
-// Build (needs Google Benchmark installed):
-//   cmake -S jni -B jni/build -DCONFIG_BENCHMARK=ON [-DAVX512_SPR_ENABLED=true] && cmake --build jni/build --target sq_bulk_similarity_bench
-//   or standalone, with the SIMD_FLAGS of the library level from cmake/init-simd.cmake:
-//   g++ -O3 -std=c++17 -mavx512f -mavx512bw -mavx512vl -mavx512vpopcntdq -mavx512bitalg -mprefer-vector-width=512
-//       sq_bulk_similarity_bench.cpp -o sq_bulk_similarity_bench -lbenchmark -lpthread     (one line)
-// Run (pin one core, quiet host):
-//   taskset -c 3 ./sq_bulk_similarity_bench --benchmark_counters_tabular=true
-//
-// Each iteration scores `vecs` vectors of dimension `dim` against one query, exactly like one
-// calculateSimilarityInBulk call: dot products in batches of 8 / 4 / 1, then the OSQ correction terms.
-// vecs = 256 and 64 time the batch-8 path; vecs = 37 (4 x 8 + 4 + 1) adds the batch-4 and the remainder
-// path; vecs = 1 times the single-vector path alone (calculateSimilarity). The ids are drawn from a
-// 64k-vector pool before timing starts. items_per_second = vectors scored per second.
+// Micro-benchmark for the SQ (4-bit query x 1-bit data) bulk similarity kernel, standalone (no JNI / faiss).
+// Both kernels are transcribed here; keep them in sync with avx512_common_simd_similarity_function.cpp.
+//   BM_Main            : main @8859ed5 (guarded static-const LUT, scalar byte tail, scalar single-vector path)
+//   BM_MainConstexprLut: main with only the LUT made constexpr
+//   BM_New             : masked tail + constexpr LUT popcount (the avx512 build)
+//   BM_NewBitalg       : masked tail + vpopcntb (the avx512_spr build; needs -mavx512bitalg)
+// Build: cmake -DCONFIG_BENCHMARK=ON (target sq_bulk_similarity_bench), or g++ -O3 -std=c++17 <SIMD_FLAGS from
+// cmake/init-simd.cmake> sq_bulk_similarity_bench.cpp -lbenchmark -lpthread. Run pinned to one core on a quiet host.
+// One iteration = one calculateSimilarityInBulk-shaped call (8 / 4 / 1 batches + OSQ correction) over `vecs`
+// vectors from a 64k-vector pool, ids drawn before timing; vecs = 1 is the single-vector path alone.
+// items_per_second = vectors scored per second.
 
 #include <benchmark/benchmark.h>
 #include <immintrin.h>
@@ -83,7 +67,7 @@ FORCE_INLINE __m512i lut_popcnt_epi8(const __m512i v) {
     return _mm512_add_epi8(_mm512_shuffle_epi8(popLut, lo), _mm512_shuffle_epi8(popLut, hi));
 }
 
-// main's version of the LUT: a function-local static with a dynamic initialiser (guard check per call).
+// main's LUT: a function-local static with a dynamic initialiser (guard check per call).
 FORCE_INLINE __m512i lut_popcnt_epi8_guarded(const __m512i v) {
     alignas(64) static const __m512i popLut = _mm512_setr_epi64(
         0x0302020102010100LL, 0x0403030203020201LL, 0x0302020102010100LL, 0x0403030203020201LL,
@@ -310,12 +294,8 @@ template <class Kernel>
 void runBenchmark(benchmark::State& state) {
     const int32_t dim = static_cast<int32_t>(state.range(0));
     const int32_t vecs = static_cast<int32_t>(state.range(1));
-    // 64k-vector pool: 2 MiB (d = 128) to 26 MiB (d = 3072) of codes + corrections, i.e. larger than L2 for
-    // d >= 256 and L3-resident on a server part, so the loads stream from L2 / L3 like a warm segment.
-    const int32_t pool = 65536;
+    const int32_t pool = 65536;  // 2 MiB (d = 128) .. 26 MiB (d = 3072): beyond L2, L3-resident
     const Dataset ds = makeDataset(dim, pool, 42u);
-    // Random ids for many iterations, drawn once before timing starts (the same sequence for every kernel);
-    // the timed loop only advances a cursor. 4096 x vecs ids = 1 MiB at vecs = 64, re-used cyclically.
     std::mt19937 rng(7);
     std::uniform_int_distribution<int32_t> idDist(0, pool - 1);
     const size_t idCount = static_cast<size_t>(vecs) * 4096;

@@ -255,10 +255,7 @@ if ("${WIN32}" STREQUAL "")
 endif()
 
 # ------------------------------ BENCHMARKS ---------------------------------
-# Google-Benchmark micro-benchmarks of the SIMD kernels (jni/benchmarks). OFF by default and not part of
-# CONFIG_ALL: they need Google Benchmark installed (find_package(benchmark)) and are run by hand on a quiet
-# host, e.g.  cmake -S jni -B jni/build -DCONFIG_BENCHMARK=ON [-DAVX512_SPR_ENABLED=true] &&
-#             cmake --build jni/build --target sq_bulk_similarity_bench && taskset -c 3 jni/bin/sq_bulk_similarity_bench
+# Google-Benchmark micro-benchmarks (jni/benchmarks). Off by default, not part of CONFIG_ALL; needs Google Benchmark installed.
 option(CONFIG_BENCHMARK "Build the Google-Benchmark micro-benchmarks under jni/benchmarks" OFF)
 if (CONFIG_BENCHMARK AND "${WIN32}" STREQUAL "")
     find_package(benchmark REQUIRED)

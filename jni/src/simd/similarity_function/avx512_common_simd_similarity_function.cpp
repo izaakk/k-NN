@@ -647,9 +647,7 @@ struct AVX512BF16L2 final : BaseSimilarityFunction<BulkScoreTransformFunc, Score
 //          + popcount(plane2 AND data) * 4
 //          + popcount(plane3 AND data) * 8
 //
-// All code paths (batches of 8 and 4, the remainder, and the single-vector score) use the same
-// AVX-512 routine. The last partial 64-byte chunk is handled with a masked load instead of a scalar
-// byte loop, so a vector of d = 128 (16 code bytes) or d = 768 (96 code bytes) never leaves SIMD.
+// Every path (batches of 8 / 4, remainder, single vector) uses the same routine; the partial last chunk is a masked load.
 //
 static constexpr float FOUR_BIT_SCALE = 1.0f / 15.0f;
 
@@ -669,9 +667,7 @@ static FORCE_INLINE void readDataCorrections(const uint8_t* ptr, float& ax, floa
     x1 = static_cast<float>(componentSum);
 }
 
-// Per-byte popcount of a 512-bit register.
-//  - With AVX512-BITALG (the avx512_spr build adds -mavx512bitalg): a single `vpopcntb`.
-//  - Otherwise (avx512 build): vpshufb nibble lookup, which works on all AVX512F/BW targets.
+// Per-byte popcount: vpopcntb when built with -mavx512bitalg (avx512_spr), else a vpshufb nibble LUT.
 static FORCE_INLINE __m512i avx512_popcnt_epi8(const __m512i v) {
 #if defined(__AVX512BITALG__)
     return _mm512_popcnt_epi8(v);
@@ -698,9 +694,7 @@ static FORCE_INLINE __m512i avx512_popcnt_epi8(const __m512i v) {
     // LUT[13] = 3
     // LUT[14] = 3
     // LUT[15] = 4 -> the first value 0x04
-    // A constexpr vector constant: a function-local `static const` initialised with an intrinsic is not a
-    // constant expression, so the compiler would emit a thread-safe init-guard check at every call and
-    // stop unrolling the batch loop around it. Brace-init has the same element order as _mm512_setr_epi64.
+    // constexpr, not a function-local static: a static would be guard-checked at every call.
     static constexpr __m512i popLut = {
         0x0302020102010100LL, 0x0403030203020201LL,
         0x0302020102010100LL, 0x0403030203020201LL,
@@ -726,9 +720,7 @@ static FORCE_INLINE __m512i avx512_popcnt_epi8(const __m512i v) {
 #endif
 }
 
-// One (possibly masked) 64-byte chunk, starting at byte `offset`, of the 4-plane AND + popcount for
-// BATCH_SIZE data vectors. Bytes outside `mask` are loaded as zero, so they contribute nothing to the
-// popcount; masked-off lanes are never read, so the load cannot fault past the end of the plane / code.
+// One 64-byte chunk at `offset` for BATCH_SIZE vectors; masked-off bytes load as zero and are never read.
 template <int BATCH_SIZE>
 static FORCE_INLINE void avx512_4bitDotProductChunk(
     const __mmask64 mask,
@@ -803,8 +795,7 @@ static FORCE_INLINE void avx512_4bitDotProductBatch(
         avx512_4bitDotProductChunk<BATCH_SIZE>(~static_cast<__mmask64>(0), i, plane0, plane1, plane2, plane3, dataVecs, acc);
     }
 
-    // Masked tail for the remaining bytes (1..63; the loop above consumed every full chunk, so the
-    // shift count is never 64)
+    // Masked tail for the remaining 1..63 bytes
     if (i < binaryCodeBytes) {
         const __mmask64 tailMask = static_cast<__mmask64>((1ULL << (binaryCodeBytes - i)) - 1ULL);
         avx512_4bitDotProductChunk<BATCH_SIZE>(tailMask, i, plane0, plane1, plane2, plane3, dataVecs, acc);
@@ -817,8 +808,7 @@ static FORCE_INLINE void avx512_4bitDotProductBatch(
     }
 }
 
-// Single data vector: the batched routine with BATCH_SIZE == 1 (used for the bulk remainder and
-// for calculateSimilarity), so every path shares one implementation.
+// Single vector (bulk remainder and calculateSimilarity): the batched routine with BATCH_SIZE == 1.
 static FORCE_INLINE float avx512_4bitDotProduct(const uint8_t* queryPtr, const uint8_t* dataVec, const int32_t binaryCodeBytes) {
     const uint8_t* dataVecs[1] = { dataVec };
     float result;

@@ -75,9 +75,8 @@ elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Linux" AND AVX512_SPR_ENABLED)
     # -mavx512vl : 256-bit "Sub-vector" support. Ex: _mm256_maskz_loadu_epi16
     # -mavx512fp16 : Native FP16 / EVEX Conversion.
     # -mavx512bf16 : Native BF16 dot-product (_mm512_dpbf16_ps) and FP32->BF16 conversion.
-    # -mavx512bitalg : Per-byte popcount (vpopcntb, _mm512_popcnt_epi8) for the 4-bit-query x 1-bit-data SQ kernel.
-    # -mavx512vpopcntdq : 64-bit lane popcount (vpopcntq). Not used by hand-written code yet; it ships with
-    #                     BITALG on every SPR+ part and lets the compiler vectorise popcount loops.
+    # -mavx512bitalg : Per-byte popcount (vpopcntb) for the SQ kernel.
+    # -mavx512vpopcntdq : 64-bit lane popcount (vpopcntq); ships with BITALG on every SPR+ part.
     # -mprefer-vector-width=512 : Emit 512-bit (zmm) code instead of the 256-bit default.
     set(CMAKE_REQUIRED_FLAGS "-mavx512f -mavx512bw -mavx512vl -mavx512fp16 -mavx512bf16 -mavx512vpopcntdq -mavx512bitalg -mprefer-vector-width=512")
     check_cxx_source_compiles("
@@ -89,7 +88,7 @@ elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Linux" AND AVX512_SPR_ENABLED)
             // Verify AVX512-BF16 support, since the SPR kernels use it for BF16 IP.
             __m512bh bf = (__m512bh)_mm512_cvtne2ps_pbh(v, v);
             __m512 acc = _mm512_dpbf16_ps(_mm512_setzero_ps(), bf, bf);
-            // Verify AVX512-BITALG (vpopcntb, used by the SQ kernel) and VPOPCNTDQ support.
+            // Verify AVX512-BITALG / VPOPCNTDQ support, since the SQ kernel uses vpopcntb.
             __m512i pc = _mm512_popcnt_epi8(_mm512_setzero_si512());
             __m512i pq = _mm512_popcnt_epi64(pc);
             (void)w;
