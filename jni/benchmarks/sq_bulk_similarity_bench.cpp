@@ -4,28 +4,37 @@
  * The OpenSearch Contributors require contributions made to
  * this file be licensed under the Apache-2.0 license or a
  * compatible open source license.
+ *
+ * Modifications Copyright OpenSearch Contributors. See
+ * GitHub history for details.
  */
 
 // Micro-benchmark for the SQ (4-bit query x 1-bit data) bulk similarity kernel, standalone
-// (no JNI / Faiss dependency), in the style of the FP16 bulk benchmarks of #3172 / #3341.
+// (no JNI / Faiss dependency). The two kernels are transcribed here so that "before" and "after" can be
+// timed in one binary; keep them in sync with avx512_common_simd_similarity_function.cpp.
 //
 // Kernels:
-//   BM_Old      : avx512_4bitDotProductBatch as on main @5437d97 (nibble-LUT popcount, scalar byte tail for
-//                 codeBytes % 64, scalar int4BitDotProduct for the vector remainder).
+//   BM_Old      : avx512_4bitDotProductBatch as on main @8859ed5 (nibble-LUT popcount, scalar byte tail for
+//                 codeBytes % 64, scalar int4BitDotProduct for the vector remainder). The LUT is a constexpr
+//                 constant here, as in the new kernel; main's function-local `static const` LUT additionally
+//                 paid an init-guard check per call (see avx512_popcnt_epi8), so main is slightly slower than BM_Old.
 //   BM_New      : masked-load tail, same nibble-LUT popcount (what the avx512 build gets).
 //   BM_NewBitalg: masked-load tail + vpopcntb (what the avx512_spr build gets); only when compiled with
 //                 -mavx512bitalg.
 //
-// Compile (AVX-512 host):
-//   g++ -O3 -std=c++17 -mavx512f -mavx512bw -mavx512vl -mavx512vpopcntdq -mavx512bitalg -mprefer-vector-width=512 \
-//       sq_bulk_similarity_bench.cpp -o sq_bulk_similarity_bench -lbenchmark -lpthread
-// Run:
-//   ./sq_bulk_similarity_bench --benchmark_counters_tabular=true
-//   (optionally: setarch $(uname -m) -R ./sq_bulk_similarity_bench --benchmark_perf_counters=cycles,instructions)
+// Build (needs Google Benchmark installed):
+//   cmake -S jni -B jni/build -DCONFIG_BENCHMARK=ON [-DAVX512_SPR_ENABLED=true] && cmake --build jni/build --target sq_bulk_similarity_bench
+//   or standalone, with the SIMD_FLAGS of the library level from cmake/init-simd.cmake:
+//   g++ -O3 -std=c++17 -mavx512f -mavx512bw -mavx512vl -mavx512vpopcntdq -mavx512bitalg -mprefer-vector-width=512
+//       sq_bulk_similarity_bench.cpp -o sq_bulk_similarity_bench -lbenchmark -lpthread     (one line)
+// Run (pin one core, quiet host):
+//   taskset -c 3 ./sq_bulk_similarity_bench --benchmark_counters_tabular=true
 //
-// Each iteration scores `vecs` random vectors of dimension `dim` against one query, exactly like one
+// Each iteration scores `vecs` vectors of dimension `dim` against one query, exactly like one
 // calculateSimilarityInBulk call: dot products in batches of 8 / 4 / 1, then the OSQ correction terms.
-// items_per_second = vectors scored per second.
+// vecs = 256 and 64 time the batch-8 path; vecs = 37 (4 x 8 + 4 + 1) adds the batch-4 and the remainder
+// path; vecs = 1 times the single-vector path alone (calculateSimilarity). The ids are drawn from a
+// 64k-vector pool before timing starts. items_per_second = vectors scored per second.
 
 #include <benchmark/benchmark.h>
 #include <immintrin.h>
@@ -64,9 +73,9 @@ FORCE_INLINE void readDataCorrections(const uint8_t* ptr, float& ax, float& lx, 
 }
 
 FORCE_INLINE __m512i lut_popcnt_epi8(const __m512i v) {
-    alignas(64) static const __m512i popLut = _mm512_setr_epi64(
+    static constexpr __m512i popLut = {
         0x0302020102010100LL, 0x0403030203020201LL, 0x0302020102010100LL, 0x0403030203020201LL,
-        0x0302020102010100LL, 0x0403030203020201LL, 0x0302020102010100LL, 0x0403030203020201LL);
+        0x0302020102010100LL, 0x0403030203020201LL, 0x0302020102010100LL, 0x0403030203020201LL};
     const __m512i lowMask = _mm512_set1_epi8(0x0F);
     const __m512i lo = _mm512_and_si512(v, lowMask);
     const __m512i hi = _mm512_and_si512(_mm512_srli_epi16(v, 4), lowMask);
@@ -80,7 +89,7 @@ FORCE_INLINE __m512i bitalg_popcnt_epi8(const __m512i v) {
 #endif
 
 // ---------------------------------------------------------------------------------------------
-// Old kernel (main @5437d97)
+// Old kernel (main @8859ed5)
 // ---------------------------------------------------------------------------------------------
 FORCE_INLINE int64_t old_int4BitDotProduct(const uint8_t* q, const uint8_t* d, const int32_t binaryCodeBytes) {
     int64_t result = 0;
@@ -153,12 +162,13 @@ struct OldKernel {
 // New kernel (this change): masked tail, one routine for every path, optional vpopcntb
 // ---------------------------------------------------------------------------------------------
 template <int BATCH_SIZE, __m512i (*POPCNT)(__m512i)>
-FORCE_INLINE void new_chunk(const __mmask64 mask, const uint8_t* p0, const uint8_t* p1, const uint8_t* p2, const uint8_t* p3,
-                            uint8_t** dataVecs, __m512i* acc) {
-    const __m512i q0 = _mm512_maskz_loadu_epi8(mask, p0), q1 = _mm512_maskz_loadu_epi8(mask, p1);
-    const __m512i q2 = _mm512_maskz_loadu_epi8(mask, p2), q3 = _mm512_maskz_loadu_epi8(mask, p3);
+FORCE_INLINE void new_chunk(const __mmask64 mask, const int32_t offset, const uint8_t* p0, const uint8_t* p1, const uint8_t* p2,
+                            const uint8_t* p3, const uint8_t* const* dataVecs, __m512i* acc) {
+    const __m512i q0 = _mm512_maskz_loadu_epi8(mask, p0 + offset), q1 = _mm512_maskz_loadu_epi8(mask, p1 + offset);
+    const __m512i q2 = _mm512_maskz_loadu_epi8(mask, p2 + offset), q3 = _mm512_maskz_loadu_epi8(mask, p3 + offset);
+    #pragma GCC unroll 8
     for (int32_t b = 0; b < BATCH_SIZE; ++b) {
-        const __m512i d = _mm512_maskz_loadu_epi8(mask, dataVecs[b]);
+        const __m512i d = _mm512_maskz_loadu_epi8(mask, dataVecs[b] + offset);
         const __m512i c0 = POPCNT(_mm512_and_si512(q0, d)), c1 = POPCNT(_mm512_and_si512(q1, d));
         const __m512i c2 = POPCNT(_mm512_and_si512(q2, d)), c3 = POPCNT(_mm512_and_si512(q3, d));
         __m512i weighted = _mm512_add_epi8(c0, _mm512_slli_epi16(c1, 1));
@@ -169,28 +179,28 @@ FORCE_INLINE void new_chunk(const __mmask64 mask, const uint8_t* p0, const uint8
 }
 
 template <int BATCH_SIZE, __m512i (*POPCNT)(__m512i)>
-FORCE_INLINE void new_4bitDotProductBatch(const uint8_t* queryPtr, uint8_t** dataVecs, const int32_t binaryCodeBytes, float* results) {
+FORCE_INLINE void new_4bitDotProductBatch(const uint8_t* queryPtr, const uint8_t* const* dataVecs, const int32_t binaryCodeBytes,
+                                          float* results) {
     const uint8_t* plane0 = queryPtr;
     const uint8_t* plane1 = queryPtr + binaryCodeBytes;
     const uint8_t* plane2 = queryPtr + 2 * binaryCodeBytes;
     const uint8_t* plane3 = queryPtr + 3 * binaryCodeBytes;
     __m512i acc[BATCH_SIZE];
+    #pragma GCC unroll 8
     for (int32_t b = 0; b < BATCH_SIZE; ++b) acc[b] = _mm512_setzero_si512();
-    uint8_t* chunkVecs[BATCH_SIZE];
     int32_t i = 0;
     for (; i + 64 <= binaryCodeBytes; i += 64) {
         if (i + 64 < binaryCodeBytes) {
             __builtin_prefetch(plane0 + i + 64);
             for (int32_t b = 0; b < BATCH_SIZE; ++b) __builtin_prefetch(dataVecs[b] + i + 64);
         }
-        for (int32_t b = 0; b < BATCH_SIZE; ++b) chunkVecs[b] = dataVecs[b] + i;
-        new_chunk<BATCH_SIZE, POPCNT>(~static_cast<__mmask64>(0), plane0 + i, plane1 + i, plane2 + i, plane3 + i, chunkVecs, acc);
+        new_chunk<BATCH_SIZE, POPCNT>(~static_cast<__mmask64>(0), i, plane0, plane1, plane2, plane3, dataVecs, acc);
     }
     if (i < binaryCodeBytes) {
         const __mmask64 tailMask = static_cast<__mmask64>((1ULL << (binaryCodeBytes - i)) - 1ULL);
-        for (int32_t b = 0; b < BATCH_SIZE; ++b) chunkVecs[b] = dataVecs[b] + i;
-        new_chunk<BATCH_SIZE, POPCNT>(tailMask, plane0 + i, plane1 + i, plane2 + i, plane3 + i, chunkVecs, acc);
+        new_chunk<BATCH_SIZE, POPCNT>(tailMask, i, plane0, plane1, plane2, plane3, dataVecs, acc);
     }
+    #pragma GCC unroll 8
     for (int32_t b = 0; b < BATCH_SIZE; ++b) results[b] = static_cast<float>(_mm512_reduce_add_epi64(acc[b]));
 }
 
@@ -201,7 +211,7 @@ struct NewKernel {
         new_4bitDotProductBatch<BATCH_SIZE, POPCNT>(q, vecs, codeBytes, out);
     }
     static FORCE_INLINE float single(const uint8_t* q, const uint8_t* vec, const int32_t codeBytes) {
-        uint8_t* vecs[1] = {const_cast<uint8_t*>(vec)};
+        const uint8_t* vecs[1] = {vec};
         float r;
         new_4bitDotProductBatch<1, POPCNT>(q, vecs, codeBytes, &r);
         return r;
@@ -287,16 +297,23 @@ template <class Kernel>
 void runBenchmark(benchmark::State& state) {
     const int32_t dim = static_cast<int32_t>(state.range(0));
     const int32_t vecs = static_cast<int32_t>(state.range(1));
-    // 64k-vector pool (> L2 for d >= 256) so the memory behaviour resembles a real segment.
+    // 64k-vector pool: 2 MiB (d = 128) to 26 MiB (d = 3072) of codes + corrections, i.e. larger than L2 for
+    // d >= 256 and L3-resident on a server part, so the loads stream from L2 / L3 like a warm segment.
     const int32_t pool = 65536;
     const Dataset ds = makeDataset(dim, pool, 42u);
+    // Random ids for many iterations, drawn once before timing starts (the same sequence for every kernel);
+    // the timed loop only advances a cursor. 4096 x vecs ids = 1 MiB at vecs = 64, re-used cyclically.
     std::mt19937 rng(7);
     std::uniform_int_distribution<int32_t> idDist(0, pool - 1);
-    std::vector<int32_t> ids(vecs);
+    const size_t idCount = static_cast<size_t>(vecs) * 4096;
+    std::vector<int32_t> idTable(idCount);
+    for (auto& id : idTable) id = idDist(rng);
+    size_t cursor = 0;
     std::vector<float> scores(vecs);
     for (auto _ : state) {
-        for (auto& id : ids) id = idDist(rng);
-        sqBulkIp<Kernel>(ds, ids.data(), scores.data(), vecs);
+        sqBulkIp<Kernel>(ds, idTable.data() + cursor, scores.data(), vecs);
+        cursor += vecs;
+        if (cursor + vecs > idCount) cursor = 0;
         benchmark::DoNotOptimize(scores.data());
         benchmark::ClobberMemory();
     }
@@ -313,7 +330,7 @@ void BM_NewBitalg(benchmark::State& state) { runBenchmark<NewKernel<bitalg_popcn
 
 void Args(benchmark::internal::Benchmark* b) {
     for (const int64_t dim : {128, 256, 384, 512, 768, 1024, 1536, 3072}) {
-        for (const int64_t vecs : {64, 256}) {
+        for (const int64_t vecs : {1, 37, 64, 256}) {
             b->Args({dim, vecs});
         }
     }
