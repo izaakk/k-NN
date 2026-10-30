@@ -698,11 +698,14 @@ static FORCE_INLINE __m512i avx512_popcnt_epi8(const __m512i v) {
     // LUT[13] = 3
     // LUT[14] = 3
     // LUT[15] = 4 -> the first value 0x04
-    alignas(64) static const __m512i popLut = _mm512_setr_epi64(
+    // A constexpr vector constant: a function-local `static const` initialised with an intrinsic is not a
+    // constant expression, so the compiler would emit a thread-safe init-guard check at every call and
+    // stop unrolling the batch loop around it. Brace-init has the same element order as _mm512_setr_epi64.
+    static constexpr __m512i popLut = {
         0x0302020102010100LL, 0x0403030203020201LL,
         0x0302020102010100LL, 0x0403030203020201LL,
         0x0302020102010100LL, 0x0403030203020201LL,
-        0x0302020102010100LL, 0x0403030203020201LL);
+        0x0302020102010100LL, 0x0403030203020201LL};
     const __m512i lowMask = _mm512_set1_epi8(0x0F);
 
     // Split each byte into low and high nibbles, look up popcount for each, sum
@@ -723,26 +726,26 @@ static FORCE_INLINE __m512i avx512_popcnt_epi8(const __m512i v) {
 #endif
 }
 
-// One (possibly masked) 64-byte chunk of the 4-plane AND + popcount for BATCH_SIZE data vectors.
-// Bytes outside `mask` are loaded as zero, so they contribute nothing to the popcount; a masked
-// load never touches memory past the end of the plane / code (AVX-512 masked loads do not fault
-// on masked-off lanes).
+// One (possibly masked) 64-byte chunk, starting at byte `offset`, of the 4-plane AND + popcount for
+// BATCH_SIZE data vectors. Bytes outside `mask` are loaded as zero, so they contribute nothing to the
+// popcount; masked-off lanes are never read, so the load cannot fault past the end of the plane / code.
 template <int BATCH_SIZE>
 static FORCE_INLINE void avx512_4bitDotProductChunk(
     const __mmask64 mask,
+    const int32_t offset,
     const uint8_t* plane0, const uint8_t* plane1, const uint8_t* plane2, const uint8_t* plane3,
-    uint8_t** dataVecs,
+    const uint8_t* const* dataVecs,
     __m512i* acc) {
     // Load up to 64 bytes from each query plane (shared across all data vectors)
-    const __m512i q0 = _mm512_maskz_loadu_epi8(mask, plane0);
-    const __m512i q1 = _mm512_maskz_loadu_epi8(mask, plane1);
-    const __m512i q2 = _mm512_maskz_loadu_epi8(mask, plane2);
-    const __m512i q3 = _mm512_maskz_loadu_epi8(mask, plane3);
+    const __m512i q0 = _mm512_maskz_loadu_epi8(mask, plane0 + offset);
+    const __m512i q1 = _mm512_maskz_loadu_epi8(mask, plane1 + offset);
+    const __m512i q2 = _mm512_maskz_loadu_epi8(mask, plane2 + offset);
+    const __m512i q3 = _mm512_maskz_loadu_epi8(mask, plane3 + offset);
 
-    #pragma unroll
+    #pragma GCC unroll 8
     for (int32_t b = 0 ; b < BATCH_SIZE ; ++b) {
         // Load up to 64 bytes of data vector's binary code
-        const __m512i d = _mm512_maskz_loadu_epi8(mask, dataVecs[b]);
+        const __m512i d = _mm512_maskz_loadu_epi8(mask, dataVecs[b] + offset);
 
         // AND each plane with data, then per-byte popcount
         const __m512i p0 = avx512_popcnt_epi8(_mm512_and_si512(q0, d));
@@ -772,7 +775,7 @@ static FORCE_INLINE void avx512_4bitDotProductChunk(
 template <int BATCH_SIZE>
 static FORCE_INLINE void avx512_4bitDotProductBatch(
     const uint8_t* queryPtr,
-    uint8_t** dataVecs,
+    const uint8_t* const* dataVecs,
     const int32_t binaryCodeBytes,
     float* results) {
     // Query vector is transposed
@@ -783,12 +786,11 @@ static FORCE_INLINE void avx512_4bitDotProductBatch(
 
     // 64-bit accumulators to avoid overflow (each iteration can add up to 64*120 = 7680 per 64-byte chunk)
     __m512i acc[BATCH_SIZE];
-    #pragma unroll
+    #pragma GCC unroll 8
     for (int32_t b = 0 ; b < BATCH_SIZE ; ++b) {
         acc[b] = _mm512_setzero_si512();
     }
 
-    uint8_t* chunkVecs[BATCH_SIZE];
     int32_t i = 0;
     for ( ; i + 64 <= binaryCodeBytes ; i += 64) {
         // Prefetch next chunk
@@ -798,27 +800,18 @@ static FORCE_INLINE void avx512_4bitDotProductBatch(
                 __builtin_prefetch(dataVecs[b] + i + 64);
             }
         }
-        #pragma unroll
-        for (int32_t b = 0 ; b < BATCH_SIZE ; ++b) {
-            chunkVecs[b] = dataVecs[b] + i;
-        }
-        avx512_4bitDotProductChunk<BATCH_SIZE>(
-            ~static_cast<__mmask64>(0), plane0 + i, plane1 + i, plane2 + i, plane3 + i, chunkVecs, acc);
+        avx512_4bitDotProductChunk<BATCH_SIZE>(~static_cast<__mmask64>(0), i, plane0, plane1, plane2, plane3, dataVecs, acc);
     }
 
-    // Masked tail for the remaining bytes (1..63)
+    // Masked tail for the remaining bytes (1..63; the loop above consumed every full chunk, so the
+    // shift count is never 64)
     if (i < binaryCodeBytes) {
         const __mmask64 tailMask = static_cast<__mmask64>((1ULL << (binaryCodeBytes - i)) - 1ULL);
-        #pragma unroll
-        for (int32_t b = 0 ; b < BATCH_SIZE ; ++b) {
-            chunkVecs[b] = dataVecs[b] + i;
-        }
-        avx512_4bitDotProductChunk<BATCH_SIZE>(
-            tailMask, plane0 + i, plane1 + i, plane2 + i, plane3 + i, chunkVecs, acc);
+        avx512_4bitDotProductChunk<BATCH_SIZE>(tailMask, i, plane0, plane1, plane2, plane3, dataVecs, acc);
     }
 
     // Horizontal sum of 64-bit accumulators into results
-    #pragma unroll
+    #pragma GCC unroll 8
     for (int32_t b = 0 ; b < BATCH_SIZE ; ++b) {
         results[b] = static_cast<float>(_mm512_reduce_add_epi64(acc[b]));
     }
@@ -827,7 +820,7 @@ static FORCE_INLINE void avx512_4bitDotProductBatch(
 // Single data vector: the batched routine with BATCH_SIZE == 1 (used for the bulk remainder and
 // for calculateSimilarity), so every path shares one implementation.
 static FORCE_INLINE float avx512_4bitDotProduct(const uint8_t* queryPtr, const uint8_t* dataVec, const int32_t binaryCodeBytes) {
-    uint8_t* dataVecs[1] = { const_cast<uint8_t*>(dataVec) };
+    const uint8_t* dataVecs[1] = { dataVec };
     float result;
     avx512_4bitDotProductBatch<1>(queryPtr, dataVecs, binaryCodeBytes, &result);
     return result;
@@ -878,7 +871,8 @@ struct AVX512SQSimilarityFunction final : SimilarityFunction {
                 if constexpr (Mode == SQMetricMode::MAX_IP || Mode == SQMetricMode::COSINE) {
                     scores[processedCount + i] += queryAdditional + additional - centroidDp;
                 } else {
-                    scores[processedCount + i] = std::max(0.0F, queryAdditional + additional - 2 * scores[processedCount + i]);
+                    scores[processedCount + i] =
+                        std::max(0.0F, queryAdditional + additional - 2 * scores[processedCount + i]);
                 }
             }
         }
@@ -904,7 +898,8 @@ struct AVX512SQSimilarityFunction final : SimilarityFunction {
                 if constexpr (Mode == SQMetricMode::MAX_IP || Mode == SQMetricMode::COSINE) {
                     scores[processedCount + i] += queryAdditional + additional - centroidDp;
                 } else {
-                    scores[processedCount + i] = std::max(0.0F, queryAdditional + additional - 2 * scores[processedCount + i]);
+                    scores[processedCount + i] =
+                        std::max(0.0F, queryAdditional + additional - 2 * scores[processedCount + i]);
                 }
             }
         }
