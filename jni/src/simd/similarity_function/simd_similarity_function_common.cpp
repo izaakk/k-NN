@@ -195,9 +195,9 @@ SimdVectorSearchContext* SimilarityFunction::saveSearchContext(
     // Allocate query vector space
     if (THREAD_LOCAL_SIMD_VEC_SRCH_CTX.queryVectorByteSize < queryByteSize) {
         // We need to allocate or re-allocate the space.
-        // Allocating 64 bytes aligned memory.
+        // Allocating 64 bytes aligned memory, plus one 64-byte line so a masked tail load's window stays inside it.
         // Since 16000 dimension is the maximum, therefore at most 62.6KB will be allocated per thread.
-        const auto roundedUpQueryByteSize = ((queryByteSize + 63) / 64) * 64;
+        const auto roundedUpQueryByteSize = ((queryByteSize + 63) / 64) * 64 + 64;
         void* alignedPtr = allocate_aligned_memory(64, roundedUpQueryByteSize);
         if (alignedPtr == nullptr) {
             throw std::runtime_error(
