@@ -109,7 +109,10 @@ public class PlatformUtils {
 
     public static synchronized boolean isAVX512SPRSupportedBySystem() {
         if (isAVX512SPRSupported == null) {
-            isAVX512SPRSupported = areAVX512FlagsAvailable(new String[] { "avx512_fp16", "avx512_bf16", "avx512_vpopcntdq" });
+            // avx512_bitalg: the avx512_spr SIMD library is compiled with -mavx512bitalg (vpopcntb in the SQ kernel).
+            isAVX512SPRSupported = areAVX512FlagsAvailable(
+                new String[] { "avx512_fp16", "avx512_bf16", "avx512_vpopcntdq", "avx512_bitalg" }
+            );
         }
         return isAVX512SPRSupported;
     }

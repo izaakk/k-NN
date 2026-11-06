@@ -219,6 +219,7 @@ if ("${WIN32}" STREQUAL "")
                 tests/nmslib_stream_support_test.cpp
                 tests/faiss_index_bq_unit_test.cpp
                 tests/faiss_sq_distance_computer_test.cpp
+                tests/simd_sq_similarity_function_test.cpp
                 tests/build_config_test.cpp
         )
 
@@ -233,6 +234,7 @@ if ("${WIN32}" STREQUAL "")
                 ${TARGET_LIB_NMSLIB}
                 ${TARGET_LIB_COMMON}
                 ${TARGET_LIB_UTIL}
+                ${TARGET_LIB_SIMD}
         )
 
         target_compile_definitions(jni_test PRIVATE ${KNN_BUILD_CONFIG_DEFINITIONS})
@@ -250,6 +252,17 @@ if ("${WIN32}" STREQUAL "")
 
         set_target_properties(jni_test PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/bin)
     endif ()
+endif()
+
+# ------------------------------ BENCHMARKS ---------------------------------
+# Google-Benchmark micro-benchmarks (jni/benchmarks). Off by default, not part of CONFIG_ALL; needs Google Benchmark installed.
+option(CONFIG_BENCHMARK "Build the Google-Benchmark micro-benchmarks under jni/benchmarks" OFF)
+if (CONFIG_BENCHMARK AND "${WIN32}" STREQUAL "")
+    find_package(benchmark REQUIRED)
+    add_executable(sq_bulk_similarity_bench benchmarks/sq_bulk_similarity_bench.cpp)
+    target_compile_options(sq_bulk_similarity_bench PRIVATE ${SIMD_FLAGS})
+    target_link_libraries(sq_bulk_similarity_bench benchmark::benchmark)
+    set_target_properties(sq_bulk_similarity_bench PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/bin)
 endif()
 
 # ---------------------------------------------------------------------------

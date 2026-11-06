@@ -14,6 +14,7 @@ package org.opensearch.knn.jni;
 import com.sun.jna.Platform;
 
 import org.junit.Assert;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.MockedStatic;
@@ -34,6 +35,11 @@ public class PlatformUtilTests extends Assert {
 
     @Before
     public void setUp() {
+        PlatformUtils.reset();
+    }
+
+    @After
+    public void tearDown() {
         PlatformUtils.reset();
     }
 
@@ -258,7 +264,7 @@ public class PlatformUtilTests extends Assert {
 
             try (MockedStatic<Files> mockedFiles = mockStatic(Files.class)) {
                 mockedFiles.when(() -> Files.lines(Paths.get(LINUX_PROC_CPU_INFO)))
-                    .thenReturn(Stream.of("flags: avx512_fp16 avx512_bf16 avx512_vpopcntdq", "dummy string"));
+                    .thenReturn(Stream.of("flags: avx512_fp16 avx512_bf16 avx512_vpopcntdq avx512_bitalg", "dummy string"));
                 assertTrue(isAVX512SPRSupportedBySystem());
             }
         }
@@ -272,7 +278,7 @@ public class PlatformUtilTests extends Assert {
 
             try (MockedStatic<Files> mockedFiles = mockStatic(Files.class)) {
                 mockedFiles.when(() -> Files.lines(Paths.get(LINUX_PROC_CPU_INFO)))
-                    .thenReturn(Stream.of("flags: avx512_fp16 avx512_vpopcntdq", "dummy string"));
+                    .thenReturn(Stream.of("flags: avx512_fp16 avx512_bf16 avx512_vpopcntdq", "dummy string"));
                 assertFalse(isAVX512SPRSupportedBySystem());
             }
         }
